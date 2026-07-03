@@ -1,6 +1,6 @@
 # Configuration
 
-Turnwire v2 reads one owner-only JSON file. It never loads repository config or
+Turnwire reads one owner-only JSON file. It never loads repository config or
 `.env` files.
 
 Default locations:
@@ -16,7 +16,6 @@ Global `--config PATH` and `--data-dir PATH` overrides precede the command.
 
 ```json
 {
-  "version": 2,
   "identity": {
     "name": "work",
     "peers": [

@@ -249,7 +249,7 @@ func runDoctor(ctx context.Context, args []string, opts options, stdout io.Write
 		}
 	}
 	cfg, loadErr := config.Load(opts.configPath)
-	add("config", loadErr, "valid v2 configuration")
+	add("config", loadErr, "valid configuration")
 	if loadErr == nil {
 		auditDir, resolveErr := resolveAuditDir(cfg, opts.dataDir)
 		add("audit_path", resolveErr, "resolved")

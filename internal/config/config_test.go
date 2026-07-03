@@ -4,7 +4,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +15,7 @@ func TestDefaultIsPinnedFailClosedOpenAIGuard(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 2 || cfg.Guard.API != "responses" || cfg.Guard.Model != "gpt-5.4-2026-03-05" {
+	if cfg.Guard.API != "responses" || cfg.Guard.Model != "gpt-5.4-2026-03-05" {
 		t.Fatalf("default guard = %#v", cfg.Guard)
 	}
 	if cfg.Guard.PromptCacheRetention != "in_memory" || !cfg.Guard.AllowRemote {
@@ -71,6 +73,13 @@ func TestWriteLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "config.json")
 	if err := Write(path, cfg, false); err != nil {
 		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"version"`) {
+		t.Fatalf("config contains a redundant format version: %s", encoded)
 	}
 	loaded, err := Load(path)
 	if err != nil {

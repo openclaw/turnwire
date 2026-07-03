@@ -20,7 +20,7 @@ import (
 	"github.com/openclaw/turnwire/internal/identity"
 )
 
-func TestInitCreatesV2IdentityAndPeerAdd(t *testing.T) {
+func TestInitCreatesIdentityAndPeerAdd(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "config", "config.json")
 	dataDir := filepath.Join(root, "state")
@@ -33,7 +33,7 @@ func TestInitCreatesV2IdentityAndPeerAdd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 2 || cfg.Identity.Name != "work" || cfg.Guard.Model != "gpt-5.5-2026-04-23" || cfg.Guard.PromptCacheRetention != "24h" {
+	if cfg.Identity.Name != "work" || cfg.Guard.Model != "gpt-5.5-2026-04-23" || cfg.Guard.PromptCacheRetention != "24h" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
