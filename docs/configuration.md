@@ -18,6 +18,11 @@ must appear before the command.
 
 ## Provider
 
+`provider.api` selects `chat_completions` or `responses`. The local default is
+`chat_completions`. `turnwire init --provider openai` selects `responses`,
+`https://api.openai.com/v1/responses`, `OPENAI_API_KEY`, and `gpt-5.5`.
+Use `--model gpt-5.4` when initializing to select GPT-5.4 instead.
+
 `provider.endpoint` must be an absolute URL. Plain HTTP is allowed only for a
 literal loopback IP address such as `127.0.0.1` or `[::1]`; hostnames are never
 treated as local after DNS resolution. A non-loopback endpoint requires HTTPS
@@ -26,10 +31,10 @@ and `provider.allow_remote: true`.
 `provider.api_key_env`, when set, names the environment variable containing a
 bearer token. The variable's value is read at request time and is never logged.
 
-The endpoint must implement the non-streaming Chat Completions request and
-response shape at `/v1/chat/completions`. Turnwire sends exactly two messages:
-a fixed, text-only system instruction and the accepted user text. It never
-sends a `tools` field.
+The endpoint must implement the selected non-streaming API. Chat Completions
+receives exactly two messages: a fixed, text-only system instruction and the
+accepted user text. Responses receives the same values as `instructions` and
+`input`, with `store: false`. Turnwire never sends tools through either API.
 
 ## Limits
 

@@ -26,7 +26,7 @@ MCP client or agent
 operator-selected transport
     │ authenticated externally when crossing hosts
     ▼
-turnwire serve ──► Chat Completions-compatible text model
+turnwire serve ──► Chat Completions or Responses text model
     │
     └── append-only audit.jsonl
 ```
@@ -45,8 +45,8 @@ Requirements:
 - macOS builds must have cgo enabled so native ACLs can be inspected; a
   cgo-disabled binary compiles but fails closed at runtime.
 - Go 1.25 or newer.
-- A non-streaming Chat Completions-compatible endpoint. The default is
-  [Ollama](https://ollama.com/) serving the public
+- A non-streaming Chat Completions- or Responses-compatible endpoint. The
+  default is [Ollama](https://ollama.com/) serving the public
   [`gpt-oss:20b`](https://ollama.com/library/gpt-oss) model on loopback.
 
 ```bash
@@ -54,6 +54,23 @@ mkdir -p ./bin
 go build -o ./bin/turnwire ./cmd/turnwire
 ollama pull gpt-oss:20b
 ./bin/turnwire init
+./bin/turnwire doctor --probe
+```
+
+To use an OpenAI GPT model instead, set `OPENAI_API_KEY` and initialize the
+OpenAI preset. It uses the Responses API, disables provider-side response
+storage, and defaults to `gpt-5.5`. GPT-5.4 is also supported with
+`--model gpt-5.4`.
+
+```bash
+./bin/turnwire init --provider openai
+./bin/turnwire doctor --probe
+```
+
+For GPT-5.4:
+
+```bash
+./bin/turnwire init --provider openai --model gpt-5.4
 ./bin/turnwire doctor --probe
 ```
 
@@ -129,6 +146,7 @@ The default config is local-only:
 {
   "version": 1,
   "provider": {
+    "api": "chat_completions",
     "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
     "model": "gpt-oss:20b"
   },

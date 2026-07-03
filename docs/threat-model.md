@@ -44,6 +44,7 @@ guarantees.
 - No caller-controlled model, endpoint, system prompt, role, tools, paths, or
   headers.
 - Model requests contain no tools and follow no redirects.
+- Responses API requests disable provider-side response storage.
 - Local endpoint by default; remote HTTPS requires explicit configuration.
 - Request recorded and synced before inference; reply recorded and synced
   before returning success.
