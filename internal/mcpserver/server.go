@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,7 +66,7 @@ func New(channel Channel, version string) *mcp.Server {
 		if err != nil {
 			return nil, mailbox.SendOutput{}, publicToolError(err)
 		}
-		return textResult(output), output, nil
+		return structuredResult(), output, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -79,7 +78,7 @@ func New(channel Channel, version string) *mcp.Server {
 		if err != nil {
 			return nil, mailbox.ReceiveOutput{}, publicToolError(err)
 		}
-		return textResult(output), output, nil
+		return structuredResult(), output, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -91,7 +90,7 @@ func New(channel Channel, version string) *mcp.Server {
 		if err != nil {
 			return nil, mailbox.ConfirmOutput{}, publicToolError(err)
 		}
-		return textResult(output), output, nil
+		return structuredResult(), output, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -103,7 +102,7 @@ func New(channel Channel, version string) *mcp.Server {
 		if err != nil {
 			return nil, mailbox.InboxOutput{}, publicToolError(err)
 		}
-		return textResult(output), output, nil
+		return structuredResult(), output, nil
 	})
 
 	type checkpointInput struct{}
@@ -117,18 +116,16 @@ func New(channel Channel, version string) *mcp.Server {
 		if err != nil {
 			return nil, identity.Checkpoint{}, publicToolError(err)
 		}
-		return textResult(output), output, nil
+		return structuredResult(), output, nil
 	})
 
 	return server
 }
 
-func textResult(value any) *mcp.CallToolResult {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"status":"serialization_failed"}`}}, IsError: true}
-	}
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}
+func structuredResult() *mcp.CallToolResult {
+	// A non-nil empty content array prevents the SDK from duplicating the
+	// structured payload into text content.
+	return &mcp.CallToolResult{Content: []mcp.Content{}}
 }
 
 // publicToolError is the privacy boundary for failures returned over MCP.
@@ -142,6 +139,8 @@ func publicToolError(err error) error {
 		return errors.New("request_conflict: request ID conflicts with an existing message")
 	case errors.Is(err, mailbox.ErrBusy):
 		return errors.New("busy: relay is at capacity; retry later")
+	case errors.Is(err, mailbox.ErrRateLimited):
+		return errors.New("rate_limited: relay request budget exhausted")
 	case errors.Is(err, mailbox.ErrClosed):
 		return errors.New("unavailable: relay is shutting down")
 	case errors.Is(err, mailbox.ErrUnauthorized):
@@ -162,12 +161,15 @@ func publicToolError(err error) error {
 // validated before the MCP SDK decodes them. If t also implements Shutdown,
 // Run starts that shutdown as soon as transport teardown is observed and waits
 // for both the MCP session and relay workers before returning.
-func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, maxInputBytes, maxConcurrent int) error {
+func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, maxInputBytes, maxConcurrent, maxRequestsPerMinute int) error {
 	if stdin == nil {
 		return errors.New("MCP input is required")
 	}
 	if stdout == nil {
 		return errors.New("MCP output is required")
+	}
+	if maxRequestsPerMinute <= 0 {
+		return errors.New("MCP request budget must be positive")
 	}
 	limit, err := frameByteLimit(maxInputBytes)
 	if err != nil {
@@ -183,6 +185,8 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 		newBoundedFrameReadCloser(stdin, limit),
 		nopWriteCloser{Writer: stdout},
 		callLimit,
+		mailbox.MaxMCPOutputBytes,
+		maxRequestsPerMinute,
 	)
 	stream.reportError = transportErrors.Record
 	reader := newTeardownReadCloser(stream)
@@ -197,7 +201,7 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 			case <-reader.Terminated():
 			case <-runDone:
 			}
-			done <- lifecycle.Shutdown(context.Background())
+			done <- lifecycle.Shutdown(context.WithoutCancel(ctx))
 		}()
 	}
 

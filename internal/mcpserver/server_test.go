@@ -69,6 +69,9 @@ func TestSignedMailboxToolsOverInMemoryTransport(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("result=%#v", result)
 	}
+	if len(result.Content) != 0 {
+		t.Fatalf("result duplicated structured output into content: %#v", result.Content)
+	}
 	if !reflect.DeepEqual(channel.input, input) {
 		t.Fatalf("input=%#v", channel.input)
 	}
@@ -82,5 +85,12 @@ func TestSignedMailboxToolsOverInMemoryTransport(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got=%#v want=%#v", got, want)
+	}
+}
+
+func TestPublicToolErrorRedactsRateLimitDetails(t *testing.T) {
+	err := publicToolError(mailbox.ErrRateLimited)
+	if got, want := err.Error(), "rate_limited: relay request budget exhausted"; got != want {
+		t.Fatalf("publicToolError = %q, want %q", got, want)
 	}
 }

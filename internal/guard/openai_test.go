@@ -19,7 +19,7 @@ func TestResponsesGuardUsesStrictNoToolDataControls(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": "resp_guard_123", "model": "gpt-5.4-2026-03-05", "status": "completed",
-			"output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": `{"decision":"allow","reason_code":"allowed","data_classes":["coordination"],"explanation":"Routine coordination."}`}}}},
+			"output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": `{"classification":"allow_coordination","explanation":"Routine coordination."}`}}}},
 		})
 	}))
 	defer server.Close()
@@ -69,5 +69,36 @@ func TestValidateVerdictRejectsSensitiveAllowAndReview(t *testing.T) {
 	}
 	if err := validateVerdict(Verdict{Decision: DecisionAllow, ReasonCode: "allowed", DataClasses: []string{"coordination"}, Explanation: "Routine."}); err != nil {
 		t.Fatalf("valid allow rejected: %v", err)
+	}
+}
+
+func TestResponsesGuardRejectsDifferentReturnedModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-request-id", "req_guard_123")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "resp_guard_123", "model": "gpt-5.4", "status": "completed",
+			"output": []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": `{"classification":"allow_coordination","explanation":"Routine coordination."}`}}}},
+		})
+	}))
+	defer server.Close()
+	model, err := NewHTTP(HTTPConfig{Endpoint: server.URL, Model: "gpt-5.4-2026-03-05", Client: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Evaluate(context.Background(), Input{Text: "meeting at 10"}); err == nil || !strings.Contains(err.Error(), "matching provider audit identifiers") {
+		t.Fatalf("model mismatch error = %v", err)
+	}
+}
+
+func TestClassificationMappingCannotProduceContradictoryVerdict(t *testing.T) {
+	for _, classification := range classificationNames {
+		verdict, err := verdictForClassification(modelVerdict{Classification: classification, Explanation: "Bounded explanation."})
+		if err != nil {
+			t.Fatalf("classification %q: %v", classification, err)
+		}
+		if err := validateVerdict(verdict); err != nil {
+			t.Fatalf("classification %q produced %#v: %v", classification, verdict, err)
+		}
 	}
 }

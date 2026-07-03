@@ -24,6 +24,9 @@ func TestDefaultIsPinnedFailClosedOpenAIGuard(t *testing.T) {
 	if cfg.Identity.Peers == nil || len(cfg.Identity.Peers) != 0 {
 		t.Fatalf("default peers = %#v", cfg.Identity.Peers)
 	}
+	if cfg.Limits.MaxRequestsPerMinute != defaultMaxRequestsPerMinute || cfg.Limits.MaxGuardCallsPerHour != defaultMaxGuardCallsPerHour {
+		t.Fatalf("default budgets = %#v", cfg.Limits)
+	}
 }
 
 func TestGPT55RejectsUnsupportedInMemoryCache(t *testing.T) {
@@ -35,6 +38,31 @@ func TestGPT55RejectsUnsupportedInMemoryCache(t *testing.T) {
 	cfg.Guard.PromptCacheRetention = "24h"
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestModelAliasesAreRejected(t *testing.T) {
+	for _, alias := range []string{"gpt-5.4", "gpt-5.5"} {
+		cfg := Default()
+		cfg.Guard.Model = alias
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("model alias %q accepted", alias)
+		}
+	}
+}
+
+func TestRequestBudgetsAreHardBounded(t *testing.T) {
+	for _, mutate := range []func(*Config){
+		func(cfg *Config) { cfg.Limits.MaxRequestsPerMinute = 0 },
+		func(cfg *Config) { cfg.Limits.MaxRequestsPerMinute = maxRequestsPerMinute + 1 },
+		func(cfg *Config) { cfg.Limits.MaxGuardCallsPerHour = 0 },
+		func(cfg *Config) { cfg.Limits.MaxGuardCallsPerHour = maxGuardCallsPerHour + 1 },
+	} {
+		cfg := Default()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid budgets accepted: %#v", cfg.Limits)
+		}
 	}
 }
 

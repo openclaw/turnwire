@@ -248,191 +248,93 @@ func TestRequestLimitedStreamCountsInboundResponsesAsNonCalls(t *testing.T) {
 	}
 }
 
-func TestRequestLimitedStreamRejectsOverCapacityBatchAtomically(t *testing.T) {
-	first := mustID(t, float64(1))
-	second := mustID(t, float64(2))
-	input := batchFrame(t,
-		&jsonrpc.Request{ID: first, Method: "first"},
-		&jsonrpc.Request{ID: second, Method: "second"},
-		&jsonrpc.Response{ID: mustID(t, float64(99))},
-	)
-	output := &lockedWriteCloser{}
-	stream := newStaticLimitedStream(input, output, 1)
+func TestRequestLimitedStreamBudgetsSchemaInvalidCallsBeforeSDK(t *testing.T) {
+	// A tools/call without params fails typed tool validation, but it must still
+	// consume the transport budget before reaching the SDK.
+	input := callFrame(t, "invalid-1", "tools/call") + callFrame(t, "invalid-2", "tools/call")
+	stream := newStaticLimitedStream(input, &lockedWriteCloser{}, 2)
+	stream.requestBudget = newWindowBudget(1, time.Minute)
 	t.Cleanup(func() { _ = stream.Close() })
 
-	if _, err := readStreamFrame(stream); !errors.Is(err, errBatchCapacityExhausted) {
-		t.Fatalf("over-capacity batch error = %v, want %v", err, errBatchCapacityExhausted)
-	}
-	if output.String() != "" {
-		t.Fatalf("over-capacity batch produced partial output: %q", output.String())
-	}
-	pending, responding := limiterCounts(stream)
-	stream.mu.Lock()
-	nonCalls := stream.nonCalls
-	stream.mu.Unlock()
-	if pending != 0 || responding != 0 || nonCalls != 0 {
-		t.Fatalf("over-capacity batch changed state: pending=%d responding=%d nonCalls=%d", pending, responding, nonCalls)
+	mustReadOneMessage(t, stream)
+	if _, err := readStreamFrame(stream); !errors.Is(err, errRequestBudgetExhausted) {
+		t.Fatalf("second invalid call error = %v, want %v", err, errRequestBudgetExhausted)
 	}
 }
 
-func TestRequestLimitedStreamRejectsHugeTinyElementBatchBeforeForwarding(t *testing.T) {
-	// This models a configured frame of roughly six megabytes, but contains
-	// millions of elements. Classification must stop at the batch cardinality cap
-	// instead of materializing an attacker-sized []json.RawMessage.
+func TestRequestLimitedStreamBudgetsMalformedJSONRPCBeforeSDK(t *testing.T) {
+	frame := "{\"jsonrpc\":\"1.0\",\"id\":\"bad\",\"method\":\"tools/call\"}\n"
+	if _, err := jsonrpc.DecodeMessage([]byte(strings.TrimSpace(frame))); err == nil {
+		t.Fatal("test frame unexpectedly decoded as JSON-RPC")
+	}
+	stream := newStaticLimitedStream(frame+frame, &lockedWriteCloser{}, 2)
+	stream.requestBudget = newWindowBudget(1, time.Minute)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if got, err := readStreamFrame(stream); err != nil || string(got) != frame {
+		t.Fatalf("first malformed frame = (%q, %v)", got, err)
+	}
+	if _, err := readStreamFrame(stream); !errors.Is(err, errRequestBudgetExhausted) {
+		t.Fatalf("second malformed frame error = %v, want %v", err, errRequestBudgetExhausted)
+	}
+}
+
+func TestRequestLimitedStreamRejectsBatchBeforeForwarding(t *testing.T) {
+	input := batchFrame(t,
+		&jsonrpc.Request{ID: mustID(t, "first"), Method: "tools/call"},
+		&jsonrpc.Request{ID: mustID(t, "second"), Method: "tools/call"},
+	)
+	output := &lockedWriteCloser{}
+	stream := newStaticLimitedStream(input, output, 2)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if _, err := readStreamFrame(stream); !errors.Is(err, errBatchUnsupported) {
+		t.Fatalf("batch error = %v, want %v", err, errBatchUnsupported)
+	}
+	if output.String() != "" {
+		t.Fatalf("rejected batch produced output: %q", output.String())
+	}
+	pending, responding := limiterCounts(stream)
+	if pending != 0 || responding != 0 {
+		t.Fatalf("rejected batch changed state: pending=%d responding=%d", pending, responding)
+	}
+}
+
+func TestRequestLimitedStreamRejectsHugeBatchWithoutParsing(t *testing.T) {
 	frame := "[" + strings.Repeat("0,", 3<<20) + "0]\n"
 	output := &lockedWriteCloser{}
 	stream := newRequestLimitedStream(
 		newBoundedFrameReadCloser(strings.NewReader(frame), len(frame)),
 		output,
 		1,
+		testMaxOutputBytes,
+		600,
 	)
 	t.Cleanup(func() { _ = stream.Close() })
 
 	buffer := make([]byte, 1)
-	if n, err := stream.Read(buffer); n != 0 || !errors.Is(err, errBatchCapacityExhausted) {
-		t.Fatalf("huge batch Read = (%d, %v), want (0, %v)", n, err, errBatchCapacityExhausted)
+	if n, err := stream.Read(buffer); n != 0 || !errors.Is(err, errBatchUnsupported) {
+		t.Fatalf("huge batch Read = (%d, %v), want (0, %v)", n, err, errBatchUnsupported)
 	}
 	if output.String() != "" {
 		t.Fatalf("huge batch produced output: %q", output.String())
 	}
-	pending, responding := limiterCounts(stream)
-	stream.mu.Lock()
-	nonCalls := stream.nonCalls
-	stream.mu.Unlock()
-	if pending != 0 || responding != 0 || nonCalls != 0 {
-		t.Fatalf("huge batch changed state: pending=%d responding=%d nonCalls=%d", pending, responding, nonCalls)
-	}
 }
 
-func TestRequestLimitedStreamRejectsValidJSONInvalidBatchWithoutForwarding(t *testing.T) {
-	call := strings.TrimSuffix(callFrame(t, "must-not-be-dispatched", "tools/call"), "\n")
-	input := "[" + call + ",0]\n"
+func TestRequestLimitedStreamRejectsOversizedOutput(t *testing.T) {
 	output := &lockedWriteCloser{}
-	stream := newStaticLimitedStream(input, output, 1)
-	t.Cleanup(func() { _ = stream.Close() })
-
-	if _, err := readStreamFrame(stream); !errors.Is(err, errInvalidBatchMessage) {
-		t.Fatalf("invalid batch error = %v, want %v", err, errInvalidBatchMessage)
+	stream := newRequestLimitedStream(
+		newBoundedFrameReadCloser(strings.NewReader(""), 1<<20),
+		output,
+		1,
+		64,
+		600,
+	)
+	if n, err := stream.Write(bytes.Repeat([]byte("x"), 65)); n != 0 || !errors.Is(err, errOutputTooLarge) {
+		t.Fatalf("oversized Write = (%d, %v), want (0, %v)", n, err, errOutputTooLarge)
 	}
 	if output.String() != "" {
-		t.Fatalf("invalid batch produced output: %q", output.String())
-	}
-	pending, responding := limiterCounts(stream)
-	if pending != 0 || responding != 0 {
-		t.Fatalf("invalid batch changed state: pending=%d responding=%d", pending, responding)
-	}
-}
-
-func TestBatchMessageLimitIsDerivedAndHardCapped(t *testing.T) {
-	if got, want := batchMessageLimit(1), 1+maxInboundNonCallMessages; got != want {
-		t.Fatalf("batchMessageLimit(1) = %d, want %d", got, want)
-	}
-	if got := batchMessageLimit(math.MaxInt); got != maxJSONRPCBatchMessages {
-		t.Fatalf("batchMessageLimit(MaxInt) = %d, want %d", got, maxJSONRPCBatchMessages)
-	}
-	payload := []byte("[" + strings.Repeat("0,", maxJSONRPCBatchMessages) + "0]")
-	if _, ok, err := decodeBatchElements(payload, math.MaxInt); !ok || !errors.Is(err, errBatchCapacityExhausted) {
-		t.Fatalf("uncapped decodeBatchElements = (ok=%t, err=%v), want hard-cap error", ok, err)
-	}
-}
-
-func TestRequestLimitedStreamRejectsNotificationBatchAtomically(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		messages func(t *testing.T, callID jsonrpc.ID) []jsonrpc.Message
-	}{
-		{
-			name: "call before notification",
-			messages: func(t *testing.T, callID jsonrpc.ID) []jsonrpc.Message {
-				return []jsonrpc.Message{
-					&jsonrpc.Request{ID: callID, Method: "tools/call"},
-					&jsonrpc.Request{Method: "notifications/cancelled"},
-				}
-			},
-		},
-		{
-			name: "notification before call",
-			messages: func(t *testing.T, callID jsonrpc.ID) []jsonrpc.Message {
-				return []jsonrpc.Message{
-					&jsonrpc.Request{Method: "notifications/cancelled"},
-					&jsonrpc.Request{ID: callID, Method: "tools/call"},
-				}
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			rejectedID := mustID(t, "rejected")
-			nextID := mustID(t, "next")
-			input := batchFrame(t, test.messages(t, rejectedID)...)
-			input += callFrame(t, nextID.Raw(), "tools/call")
-			output := &lockedWriteCloser{}
-			stream := newStaticLimitedStream(input, output, 1)
-			t.Cleanup(func() { _ = stream.Close() })
-
-			if _, err := readStreamFrame(stream); !errors.Is(err, errBatchContainsNotification) {
-				t.Fatalf("notification batch error = %v, want %v", err, errBatchContainsNotification)
-			}
-			if output.String() != "" {
-				t.Fatalf("notification batch produced output: %q", output.String())
-			}
-			pending, responding := limiterCounts(stream)
-			stream.mu.Lock()
-			nonCalls := stream.nonCalls
-			stream.mu.Unlock()
-			if pending != 0 || responding != 0 || nonCalls != 0 {
-				t.Fatalf("notification batch changed state: pending=%d responding=%d nonCalls=%d", pending, responding, nonCalls)
-			}
-
-			message := mustReadOneMessage(t, stream)
-			request, ok := message.(*jsonrpc.Request)
-			if !ok || !reflect.DeepEqual(request.ID.Raw(), nextID.Raw()) {
-				t.Fatalf("message after rejected batch = %#v, want call ID %#v", message, nextID.Raw())
-			}
-			if err := writeResponse(stream, nextID); err != nil {
-				t.Fatal(err)
-			}
-			pending, responding = limiterCounts(stream)
-			if pending != 0 || responding != 0 {
-				t.Fatalf("final state: pending=%d responding=%d", pending, responding)
-			}
-		})
-	}
-}
-
-func TestRequestLimitedStreamPassesAdmissibleBatchUnchanged(t *testing.T) {
-	first := mustID(t, float64(1))
-	second := mustID(t, float64(2))
-	input := batchFrame(t,
-		&jsonrpc.Request{ID: first, Method: "first"},
-		&jsonrpc.Request{ID: second, Method: "second"},
-		&jsonrpc.Response{ID: mustID(t, float64(99))},
-	)
-	output := &lockedWriteCloser{}
-	stream := newStaticLimitedStream(input, output, 2)
-	t.Cleanup(func() { _ = stream.Close() })
-
-	frame, err := readStreamFrame(stream)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(frame) != input {
-		t.Fatalf("admissible batch changed:\n got %q\nwant %q", frame, input)
-	}
-	pending, responding := limiterCounts(stream)
-	if pending != 2 || responding != 0 {
-		t.Fatalf("admissible batch state: pending=%d responding=%d", pending, responding)
-	}
-
-	responseBatch := batchFrame(t, &jsonrpc.Response{ID: first}, &jsonrpc.Response{ID: second})
-	if _, err := stream.Write([]byte(responseBatch)); err != nil {
-		t.Fatal(err)
-	}
-	pending, responding = limiterCounts(stream)
-	if pending != 0 || responding != 0 {
-		t.Fatalf("batch response state: pending=%d responding=%d", pending, responding)
-	}
-	if output.String() != responseBatch {
-		t.Fatalf("batch response output = %q, want %q", output.String(), responseBatch)
+		t.Fatalf("oversized output was forwarded: %q", output.String())
 	}
 }
 
@@ -703,8 +605,10 @@ type errorWriteCloser struct {
 func (w *errorWriteCloser) Write([]byte) (int, error) { return 0, w.err }
 func (*errorWriteCloser) Close() error                { return nil }
 
+const testMaxOutputBytes = 8 << 20
+
 func newLimitedStream(input io.Reader, output io.WriteCloser, limit int) *requestLimitedStream {
-	return newRequestLimitedStream(newBoundedFrameReadCloser(input, 1<<20), output, limit)
+	return newRequestLimitedStream(newBoundedFrameReadCloser(input, 1<<20), output, limit, testMaxOutputBytes, 600)
 }
 
 func newStaticLimitedStream(input string, output io.WriteCloser, limit int) *requestLimitedStream {
@@ -789,14 +693,14 @@ func readOneMessage(stream *requestLimitedStream) (jsonrpc.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	messages, _, batch, decoded, err := decodeJSONRPCFrame(frame, maxJSONRPCBatchMessages)
+	message, decoded, err := decodeJSONRPCFrame(frame)
 	if err != nil {
 		return nil, err
 	}
-	if !decoded || batch || len(messages) != 1 {
+	if !decoded {
 		return nil, errors.New("stream did not return one JSON-RPC message")
 	}
-	return messages[0], nil
+	return message, nil
 }
 
 func mustReadOneMessage(t *testing.T, stream *requestLimitedStream) jsonrpc.Message {
@@ -861,41 +765,37 @@ func receiveWrite(t *testing.T, observations <-chan rawWriteObservation) rawWrit
 
 func assertResponseID(t *testing.T, frame []byte, want jsonrpc.ID) {
 	t.Helper()
-	messages, _, _, decoded, err := decodeJSONRPCFrame(frame, maxJSONRPCBatchMessages)
+	message, decoded, err := decodeJSONRPCFrame(frame)
 	if err != nil {
 		t.Fatalf("response frame classification: %v", err)
 	}
-	if !decoded || len(messages) != 1 {
+	if !decoded {
 		t.Fatalf("response frame = %q", frame)
 	}
-	response, ok := messages[0].(*jsonrpc.Response)
+	response, ok := message.(*jsonrpc.Response)
 	if !ok || !reflect.DeepEqual(response.ID.Raw(), want.Raw()) {
-		t.Fatalf("response = %#v, want ID %#v", messages[0], want.Raw())
+		t.Fatalf("response = %#v, want ID %#v", message, want.Raw())
 	}
 }
 
 func assertBusyOutput(t *testing.T, frame []byte, wantID jsonrpc.ID) {
 	t.Helper()
-	messages, _, _, decoded, err := decodeJSONRPCFrame(frame, maxJSONRPCBatchMessages)
+	message, decoded, err := decodeJSONRPCFrame(frame)
 	if err != nil {
 		t.Fatalf("busy output classification: %v", err)
 	}
 	if !decoded {
 		t.Fatalf("busy output is not JSON-RPC: %q", frame)
 	}
-	for _, message := range messages {
-		response, ok := message.(*jsonrpc.Response)
-		if !ok || !reflect.DeepEqual(response.ID.Raw(), wantID.Raw()) {
-			continue
-		}
-		var wireError *jsonrpc.Error
-		if !errors.As(response.Error, &wireError) {
-			t.Fatalf("busy response error = %#v", response.Error)
-		}
-		if wireError.Code != serverBusyCode || wireError.Message != serverBusyMessage || len(wireError.Data) != 0 {
-			t.Fatalf("busy error = %#v", wireError)
-		}
-		return
+	response, ok := message.(*jsonrpc.Response)
+	if !ok || !reflect.DeepEqual(response.ID.Raw(), wantID.Raw()) {
+		t.Fatalf("busy response for ID %#v not found in %q", wantID.Raw(), frame)
 	}
-	t.Fatalf("busy response for ID %#v not found in %q", wantID.Raw(), frame)
+	var wireError *jsonrpc.Error
+	if !errors.As(response.Error, &wireError) {
+		t.Fatalf("busy response error = %#v", response.Error)
+	}
+	if wireError.Code != serverBusyCode || wireError.Message != serverBusyMessage || len(wireError.Data) != 0 {
+		t.Fatalf("busy error = %#v", wireError)
+	}
 }

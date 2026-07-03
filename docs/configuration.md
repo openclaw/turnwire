@@ -40,7 +40,9 @@ Global `--config PATH` and `--data-dir PATH` overrides precede the command.
     "max_audit_bytes": 268435456,
     "timeout": "120s",
     "max_message_age": "24h",
-    "max_concurrent": 1
+    "max_concurrent": 1,
+    "max_requests_per_minute": 60,
+    "max_guard_calls_per_hour": 120
   },
   "audit_dir": "/optional/absolute/owner-only/path"
 }
@@ -85,14 +87,18 @@ fixed classifier instruction. Requests set:
 }
 ```
 
-The model must return `allow`, `review`, or `deny`. Invalid output, HTTP failure,
-missing credentials, cancellation, and timeout produce no envelope.
-Deterministic secret rules can deny before the API call.
+The model selects one classification from a closed enum. Turnwire maps that
+single value to a consistent `allow`, `review`, or `deny` verdict. The response
+must identify the exact configured model snapshot and include both OpenAI
+response and request IDs. Invalid output, a different returned model, missing
+evidence, HTTP failure, missing credentials, cancellation, and timeout produce
+no envelope. Deterministic secret rules can deny before the API call.
 
 Default: pinned GPT-5.4 with `in_memory` cache retention. Current OpenAI
 requirements reject `in_memory` for GPT-5.5; use `24h` or omit it. Init selects
 `24h` for GPT-5.5. Prefer GPT-5.4 in a dedicated Zero Data Retention project
-when lower cache retention matters.
+when lower cache retention matters. Only `gpt-5.4-2026-03-05` and
+`gpt-5.5-2026-04-23` are accepted; floating aliases are rejected.
 
 `api_key_env` names an existing environment variable. Its value is never
 written or logged. `policy` enters every verdict; increment `policy_version`
@@ -115,6 +121,14 @@ Retrying reruns deterministic and model guards. Approval can override only
 - `timeout`: one model guard call.
 - `max_message_age`: accepted envelope/acknowledgement age.
 - `max_concurrent`: guard operations; default 1, maximum 8.
+- `max_requests_per_minute`: all MCP tool operations; default 60, maximum 600.
+- `max_guard_calls_per_hour`: combined outbound and inbound model calls;
+  default 120, maximum 1000.
+
+Budgets are process-local sliding windows and reset on restart. Budget
+exhaustion fails closed. MCP additionally rejects JSON-RPC batches, emits only
+structured tool results, caps each output frame, and stops `list_messages`
+before its encoded result exceeds the fixed protocol ceiling.
 
 Empty/invalid text, NUL, expired or future records, wrong destinations, unknown
 peers, bad signatures, body-hash mismatches, replay conflicts, and over-limit

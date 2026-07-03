@@ -42,9 +42,11 @@ Outbound:
 3. Run local deterministic credential/secret checks. A deterministic denial
    never reaches OpenAI and cannot be locally approved.
 4. Call GPT guard with fixed instructions, no tools, `store: false`,
-   `background: false`, strict Structured Outputs, policy, peers, direction.
+   `background: false`, strict single-classification Structured Outputs,
+   policy, peers, direction.
 5. Append and sync verdict, model, policy version, OpenAI response ID and
-   request ID. Errors and invalid output fail closed.
+   request ID. The returned model must exactly match the pinned configured
+   snapshot. Errors, inconsistent evidence, and invalid output fail closed.
 6. `review` requires exact-body local approval, then a fresh guard call.
 7. Sign envelope with identities, IDs, time, body/hash, policy/model verdict,
    and source audit checkpoint.
@@ -72,7 +74,10 @@ source independently verifies and logs that acknowledgement.
   redirects, unknown peers, and audit uncertainty fail closed.
 - Remote guard traffic restricted to the official OpenAI Responses endpoint;
   only literal loopback endpoints allowed for testing.
-- Exact size limits, bounded concurrency/MCP frames, fixed audit quota.
+- Exact size limits, bounded concurrency, request/model-call budgets, bounded
+  MCP input and output frames, byte-bounded inbox results, fixed audit quota.
+- JSON-RPC batches rejected; successful tools return one structured result
+  without a duplicate text serialization.
 - Synced canonical hash-chain events before externally visible transitions.
 - Signed checkpoints for independent anchoring.
 - Public MCP errors omit provider URLs, env names, paths, backend details.
@@ -112,6 +117,8 @@ reconciliation but are not a mirrored Turnwire ledger.
 - Checkpoints prove endpoint-key possession, not uncompromised host or human
   authorship.
 - Availability depends on OpenAI, tunnel, guard API, clocks, disk, endpoints.
+- Request and model-call budgets are in-memory and reset on process restart;
+  enforce project-level OpenAI budgets independently.
 - Windows fails closed until owner-only DACL validation exists.
 
 ## Deployment requirements

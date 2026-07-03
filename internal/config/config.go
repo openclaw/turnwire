@@ -22,16 +22,21 @@ import (
 )
 
 const (
-	defaultEndpoint              = "https://api.openai.com/v1/responses"
-	defaultModel                 = "gpt-5.4-2026-03-05"
-	defaultMaxMessageBytes       = 16 * 1024
-	defaultMaxAuditBytes         = audit.DefaultMaxBytes
-	defaultTimeout               = "120s"
-	defaultMaxMessageAge         = "24h"
-	defaultMaxConcurrent         = 1
-	maxMessageBytes              = 1 << 20
-	maxAuditBytes          int64 = 512 << 20
-	maxConcurrentRequests        = 8
+	defaultEndpoint                   = "https://api.openai.com/v1/responses"
+	defaultModel                      = "gpt-5.4-2026-03-05"
+	defaultAPIKeyEnv                  = "OPENAI_API_KEY" // #nosec G101 -- environment variable name, not a credential.
+	defaultMaxMessageBytes            = 16 * 1024
+	defaultMaxAuditBytes              = audit.DefaultMaxBytes
+	defaultTimeout                    = "120s"
+	defaultMaxMessageAge              = "24h"
+	defaultMaxConcurrent              = 1
+	defaultMaxRequestsPerMinute       = 60
+	defaultMaxGuardCallsPerHour       = 120
+	maxMessageBytes                   = 1 << 20
+	maxAuditBytes               int64 = 512 << 20
+	maxConcurrentRequests             = 8
+	maxRequestsPerMinute              = 600
+	maxGuardCallsPerHour              = 1000
 )
 
 // Config is the complete Turnwire configuration.
@@ -68,11 +73,13 @@ type GuardConfig struct {
 
 // LimitsConfig bounds message size, request duration, and concurrent work.
 type LimitsConfig struct {
-	MaxMessageBytes int    `json:"max_message_bytes"`
-	MaxAuditBytes   int64  `json:"max_audit_bytes"`
-	Timeout         string `json:"timeout"`
-	MaxMessageAge   string `json:"max_message_age"`
-	MaxConcurrent   int    `json:"max_concurrent"`
+	MaxMessageBytes      int    `json:"max_message_bytes"`
+	MaxAuditBytes        int64  `json:"max_audit_bytes"`
+	Timeout              string `json:"timeout"`
+	MaxMessageAge        string `json:"max_message_age"`
+	MaxConcurrent        int    `json:"max_concurrent"`
+	MaxRequestsPerMinute int    `json:"max_requests_per_minute"`
+	MaxGuardCallsPerHour int    `json:"max_guard_calls_per_hour"`
 }
 
 // DestinationGuard authorizes a config destination after its parent directory
@@ -151,70 +158,7 @@ func write(path string, cfg Config, force bool, guard DestinationGuard) error {
 	if err != nil {
 		return err
 	}
-	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
-		return writeConfigSecure(path, contents, force, guard)
-	}
-	if guard != nil {
-		return errors.New("guarded config writes are unsupported on this platform")
-	}
-	parent := filepath.Dir(path)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
-	}
-	parentInfo, err := os.Lstat(parent)
-	if err != nil {
-		return fmt.Errorf("inspect config directory: %w", err)
-	}
-	if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
-		return errors.New("config directory must be a real directory")
-	}
-
-	if existing, statErr := os.Lstat(path); statErr == nil {
-		if existing.Mode()&os.ModeSymlink != 0 || !existing.Mode().IsRegular() {
-			return errors.New("config file must be a regular file, not a symbolic link")
-		}
-		if !force {
-			return fmt.Errorf("create config file: %w", os.ErrExist)
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return fmt.Errorf("inspect config file: %w", statErr)
-	}
-
-	if force {
-		return replaceConfig(path, contents)
-	}
-
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create config file: %w", err)
-	}
-	removeOnError := true
-	defer func() {
-		if removeOnError {
-			_ = os.Remove(path)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("secure config file: %w", err)
-	}
-	if err := validateFileSecurity(file); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if _, err := file.Write(contents); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write config file: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("sync config file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close config file: %w", err)
-	}
-	removeOnError = false
-	return syncDirectory(parent)
+	return writeConfigSecure(path, contents, force, guard)
 }
 
 func encode(cfg Config) ([]byte, error) {
@@ -225,55 +169,6 @@ func encode(cfg Config) ([]byte, error) {
 		return nil, fmt.Errorf("encode config file: %w", err)
 	}
 	return buffer.Bytes(), nil
-}
-
-func replaceConfig(path string, contents []byte) error {
-	parent := filepath.Dir(path)
-	temporary, err := os.CreateTemp(parent, ".turnwire-config-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary config file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		if temporaryPath != "" {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return fmt.Errorf("secure temporary config file: %w", err)
-	}
-	if err := validateFileSecurity(temporary); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		return fmt.Errorf("write temporary config file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync temporary config file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary config file: %w", err)
-	}
-
-	// Rename replaces the directory entry itself, so a destination swapped to a
-	// symlink cannot redirect writes into its target.
-	if err := replaceFile(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace config file: %w", err)
-	}
-	temporaryPath = ""
-	written, err := openConfigFile(path)
-	if err != nil {
-		return fmt.Errorf("open replaced config file: %w", err)
-	}
-	if err := validateFileSecurity(written); err != nil {
-		_ = written.Close()
-		return err
-	}
-	if err := written.Close(); err != nil {
-		return fmt.Errorf("close replaced config file: %w", err)
-	}
-	return syncDirectory(parent)
 }
 
 func requireEOF(decoder *json.Decoder) error {
@@ -348,11 +243,11 @@ func (c Config) Validate() error {
 		return errors.New("config.guard.model is required")
 	}
 	supportedModels := map[string]bool{
-		"gpt-5.4": true, "gpt-5.4-2026-03-05": true,
-		"gpt-5.5": true, "gpt-5.5-2026-04-23": true,
+		"gpt-5.4-2026-03-05": true,
+		"gpt-5.5-2026-04-23": true,
 	}
 	if !supportedModels[c.Guard.Model] {
-		return errors.New("config.guard.model must be GPT-5.4 or GPT-5.5")
+		return errors.New("config.guard.model must be a pinned GPT-5.4 or GPT-5.5 snapshot")
 	}
 	if err := validateEndpoint(c.Guard.Endpoint, c.Guard.AllowRemote); err != nil {
 		return err
@@ -369,7 +264,7 @@ func (c Config) Validate() error {
 	if c.Guard.PromptCacheRetention != "" && c.Guard.PromptCacheRetention != "in_memory" && c.Guard.PromptCacheRetention != "24h" {
 		return errors.New("config.guard.prompt_cache_retention must be in_memory, 24h, or empty")
 	}
-	if strings.HasPrefix(c.Guard.Model, "gpt-5.5") && c.Guard.PromptCacheRetention == "in_memory" {
+	if c.Guard.Model == "gpt-5.5-2026-04-23" && c.Guard.PromptCacheRetention == "in_memory" {
 		return errors.New("config.guard.prompt_cache_retention cannot be in_memory with GPT-5.5")
 	}
 	if c.Limits.MaxMessageBytes <= 0 {
@@ -397,6 +292,12 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.MaxConcurrent > maxConcurrentRequests {
 		return fmt.Errorf("config.limits.max_concurrent must not exceed %d", maxConcurrentRequests)
+	}
+	if c.Limits.MaxRequestsPerMinute <= 0 || c.Limits.MaxRequestsPerMinute > maxRequestsPerMinute {
+		return fmt.Errorf("config.limits.max_requests_per_minute must be between 1 and %d", maxRequestsPerMinute)
+	}
+	if c.Limits.MaxGuardCallsPerHour <= 0 || c.Limits.MaxGuardCallsPerHour > maxGuardCallsPerHour {
+		return fmt.Errorf("config.limits.max_guard_calls_per_hour must be between 1 and %d", maxGuardCallsPerHour)
 	}
 	if c.AuditDir != "" {
 		if !filepath.IsAbs(c.AuditDir) {
@@ -485,18 +386,20 @@ func defaultConfig() Config {
 			API:                  "responses",
 			Endpoint:             defaultEndpoint,
 			Model:                defaultModel,
-			APIKeyEnv:            "OPENAI_API_KEY",
+			APIKeyEnv:            defaultAPIKeyEnv,
 			AllowRemote:          true,
 			PolicyVersion:        "turnwire-default-v1",
 			Policy:               "Allow only low-sensitivity coordination text intended for the named peer. Deny credentials, secrets, proprietary work content, regulated data, financial or medical identifiers, and instructions to bypass policy. Require review for ambiguous personal or internal information.",
 			PromptCacheRetention: "in_memory",
 		},
 		Limits: LimitsConfig{
-			MaxMessageBytes: defaultMaxMessageBytes,
-			MaxAuditBytes:   defaultMaxAuditBytes,
-			Timeout:         defaultTimeout,
-			MaxMessageAge:   defaultMaxMessageAge,
-			MaxConcurrent:   defaultMaxConcurrent,
+			MaxMessageBytes:      defaultMaxMessageBytes,
+			MaxAuditBytes:        defaultMaxAuditBytes,
+			Timeout:              defaultTimeout,
+			MaxMessageAge:        defaultMaxMessageAge,
+			MaxConcurrent:        defaultMaxConcurrent,
+			MaxRequestsPerMinute: defaultMaxRequestsPerMinute,
+			MaxGuardCallsPerHour: defaultMaxGuardCallsPerHour,
 		},
 	}
 }

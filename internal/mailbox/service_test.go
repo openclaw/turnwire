@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func newEndpoint(t *testing.T, name string, peers map[string]string, evaluator g
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = approvals.Close() })
-	service, err := New(Options{Audit: log, Signer: signer, Peers: peers, Guard: evaluator, Approvals: approvals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1})
+	service, err := New(Options{Audit: log, Signer: signer, Peers: peers, Guard: evaluator, Approvals: approvals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1, MaxRequestsPerMinute: maxRequestsPerMinute, MaxGuardCallsPerHour: maxGuardCallsPerHour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +184,70 @@ func TestDeterministicSecretBlockSkipsModel(t *testing.T) {
 		if entry.Type == eventOutboundReleased {
 			t.Fatal("blocked secret was released")
 		}
+	}
+}
+
+func TestRequestBudgetFailsClosed(t *testing.T) {
+	endpoint := newEndpoint(t, "work", nil, &fakeGuard{})
+	endpoint.service.requestBudget = newWindowBudget(1, time.Minute)
+	if _, err := endpoint.service.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := endpoint.service.Checkpoint(); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("second checkpoint error = %v, want %v", err, ErrRateLimited)
+	}
+}
+
+func TestGuardCallBudgetFailsClosedAndAudits(t *testing.T) {
+	evaluator := &fakeGuard{verdict: guard.Verdict{Decision: guard.DecisionAllow, ReasonCode: "allowed", DataClasses: []string{"coordination"}, Explanation: "Allowed."}}
+	endpoint := newEndpoint(t, "work", map[string]string{"personal": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, evaluator)
+	endpoint.service.guardBudget = newWindowBudget(1, time.Hour)
+	if _, err := endpoint.service.Send(context.Background(), SendInput{Destination: "personal", Text: "first routine note", RequestID: "budget-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := endpoint.service.Send(context.Background(), SendInput{Destination: "personal", Text: "second routine note", RequestID: "budget-2"}); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("second send error = %v, want %v", err, ErrRateLimited)
+	}
+	if evaluator.callCount() != 1 {
+		t.Fatalf("guard calls = %d, want 1", evaluator.callCount())
+	}
+	entries, err := endpoint.log.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Type == eventGuardFailed && entry.ErrorCode == "guard_budget_exhausted" {
+			return
+		}
+	}
+	t.Fatal("guard budget exhaustion was not audited")
+}
+
+func TestInboxOutputIsByteBounded(t *testing.T) {
+	endpoint := newEndpoint(t, "personal", nil, &fakeGuard{})
+	body := strings.Repeat("x", MaxMessageBytes)
+	message := Message{MessageID: "message", ConversationID: "conversation", Source: "work", Destination: "personal", Body: body, BodySHA256: hashText(body), ReceivedAt: time.Now().UTC().Format(time.RFC3339Nano), AuditSequence: 1}
+	endpoint.service.mu.Lock()
+	for i := 0; i < 100; i++ {
+		copy := message
+		copy.AuditSequence = uint64(i + 1)
+		endpoint.service.inbox = append(endpoint.service.inbox, copy)
+	}
+	endpoint.service.mu.Unlock()
+
+	output, err := endpoint.service.Inbox(context.Background(), InboxInput{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Messages) == 0 || len(output.Messages) >= 100 {
+		t.Fatalf("bounded message count = %d", len(output.Messages))
+	}
+	if len(encoded) > MaxInboxOutputBytes {
+		t.Fatalf("encoded inbox = %d bytes, max %d", len(encoded), MaxInboxOutputBytes)
 	}
 }
 
@@ -334,7 +399,7 @@ func TestRestartIssuesAcknowledgementForCommittedAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(Options{Audit: reopenedLog, Signer: reopenedSigner, Peers: map[string]string{"work": work.signer.PublicKey()}, Guard: personalGuard, Approvals: reopenedApprovals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1})
+	reopened, err := New(Options{Audit: reopenedLog, Signer: reopenedSigner, Peers: map[string]string{"work": work.signer.PublicKey()}, Guard: personalGuard, Approvals: reopenedApprovals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1, MaxRequestsPerMinute: maxRequestsPerMinute, MaxGuardCallsPerHour: maxGuardCallsPerHour})
 	if err != nil {
 		t.Fatal(err)
 	}

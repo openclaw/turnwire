@@ -55,10 +55,11 @@ Tunnel is transport, not generic host-to-host networking.
 ## Security model
 
 - Default guard: pinned `gpt-5.4-2026-03-05` through Responses.
-- GPT-5.5 supported with `--model gpt-5.5-2026-04-23` or `gpt-5.5`.
+- GPT-5.5 supported only as pinned `gpt-5.5-2026-04-23`. Floating model
+  aliases are rejected.
 - Every releasable message gets an outbound model verdict. Every received
   envelope gets a separate inbound verdict. Errors and malformed output fail
-  closed.
+  closed. The returned model must exactly match the configured snapshot.
 - Obvious credentials and secrets are denied locally before reaching the guard
   API. GPT is a secondary classifier, not the cryptographic or deterministic
   boundary.
@@ -72,6 +73,10 @@ Tunnel is transport, not generic host-to-host networking.
   identities, hashes, and receipts enter a synced hash-chained local log.
 - Signed audit checkpoints can be independently stored to detect later
   whole-log replacement or truncation.
+- MCP emits one structured result, rejects JSON-RPC batches, and caps every
+  input frame and output frame. Inbox reads stop at a fixed encoded-byte cap.
+- Per-process request and guard-call budgets bound request floods and model
+  spend. Exhaustion fails closed; counters reset when the process restarts.
 
 For strongest OpenAI-side controls, use a dedicated API project approved for
 Zero Data Retention. `store: false` alone does not remove default abuse-
