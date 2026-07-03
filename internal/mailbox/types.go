@@ -16,8 +16,19 @@ var (
 	ErrInvalidInput = errors.New("invalid channel input")
 	ErrConflict     = errors.New("identifier conflicts with an existing message")
 	ErrBusy         = errors.New("channel is at its concurrency limit")
+	ErrRateLimited  = errors.New("channel request budget exhausted")
 	ErrClosed       = errors.New("channel service is shutting down")
 	ErrUnauthorized = errors.New("message signature or peer identity is invalid")
+)
+
+const (
+	// MaxMessageBytes is the protocol-wide decoded text ceiling.
+	MaxMessageBytes = 1 << 20
+	// MaxInboxOutputBytes bounds the encoded structured result of list_messages.
+	// It admits one maximally escaped protocol message plus fixed metadata.
+	MaxInboxOutputBytes = 6*MaxMessageBytes + 64*1024
+	// MaxMCPOutputBytes adds fixed JSON-RPC and MCP result framing headroom.
+	MaxMCPOutputBytes = MaxInboxOutputBytes + 64*1024
 )
 
 type SendInput struct {

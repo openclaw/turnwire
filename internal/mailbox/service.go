@@ -29,21 +29,25 @@ const (
 	eventAcknowledgementIssued = "acknowledgement_issued"
 	eventDeliveryConfirmed     = "delivery_confirmed"
 	eventInboxRead             = "inbox_read"
+	maxRequestsPerMinute       = 600
+	maxGuardCallsPerHour       = 1000
 )
 
 type Options struct {
-	Audit           *audit.Log
-	Signer          *identity.Signer
-	Peers           map[string]string
-	Guard           guard.Evaluator
-	Approvals       *approval.Store
-	Policy          string
-	PolicyVersion   string
-	MaxMessageBytes int
-	Timeout         time.Duration
-	MaxMessageAge   time.Duration
-	MaxConcurrent   int
-	Now             func() time.Time
+	Audit                *audit.Log
+	Signer               *identity.Signer
+	Peers                map[string]string
+	Guard                guard.Evaluator
+	Approvals            *approval.Store
+	Policy               string
+	PolicyVersion        string
+	MaxMessageBytes      int
+	Timeout              time.Duration
+	MaxMessageAge        time.Duration
+	MaxConcurrent        int
+	MaxRequestsPerMinute int
+	MaxGuardCallsPerHour int
+	Now                  func() time.Time
 }
 
 type requestRecord struct {
@@ -73,6 +77,8 @@ type Service struct {
 	timeout         time.Duration
 	maxMessageAge   time.Duration
 	semaphore       chan struct{}
+	requestBudget   *windowBudget
+	guardBudget     *windowBudget
 	now             func() time.Time
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
@@ -95,7 +101,9 @@ func New(opts Options) (*Service, error) {
 	if opts.Audit == nil || opts.Signer == nil || opts.Guard == nil || opts.Approvals == nil {
 		return nil, errors.New("audit, identity, guard, and approval store are required")
 	}
-	if opts.MaxMessageBytes <= 0 || opts.Timeout <= 0 || opts.MaxMessageAge <= 0 || opts.MaxConcurrent <= 0 {
+	if opts.MaxMessageBytes <= 0 || opts.MaxMessageBytes > MaxMessageBytes || opts.Timeout <= 0 || opts.MaxMessageAge <= 0 || opts.MaxConcurrent <= 0 ||
+		opts.MaxRequestsPerMinute <= 0 || opts.MaxRequestsPerMinute > maxRequestsPerMinute ||
+		opts.MaxGuardCallsPerHour <= 0 || opts.MaxGuardCallsPerHour > maxGuardCallsPerHour {
 		return nil, errors.New("channel limits must be positive")
 	}
 	if strings.TrimSpace(opts.Policy) == "" || strings.TrimSpace(opts.PolicyVersion) == "" {
@@ -110,8 +118,11 @@ func New(opts Options) (*Service, error) {
 		audit: opts.Audit, signer: opts.Signer, peers: clonePeers(opts.Peers), guard: opts.Guard,
 		approvals: opts.Approvals, policy: opts.Policy, policyVersion: opts.PolicyVersion,
 		maxMessageBytes: opts.MaxMessageBytes, timeout: opts.Timeout, maxMessageAge: opts.MaxMessageAge,
-		semaphore: make(chan struct{}, opts.MaxConcurrent), now: now,
-		active: make(map[string]string), requests: make(map[string]requestRecord),
+		semaphore:     make(chan struct{}, opts.MaxConcurrent),
+		requestBudget: newWindowBudget(opts.MaxRequestsPerMinute, time.Minute),
+		guardBudget:   newWindowBudget(opts.MaxGuardCallsPerHour, time.Hour),
+		now:           now,
+		active:        make(map[string]string), requests: make(map[string]requestRecord),
 		sent: make(map[string]Envelope), received: make(map[string]receivedRecord), seenInbound: make(map[string]string),
 		confirmed: make(map[string]ConfirmOutput),
 		drained:   make(chan struct{}), lifecycleCtx: lifecycleCtx, lifecycleCancel: lifecycleCancel,
@@ -126,6 +137,9 @@ func New(opts Options) (*Service, error) {
 func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return SendOutput{}, err
+	}
+	if !s.requestBudget.take(s.now()) {
+		return SendOutput{}, ErrRateLimited
 	}
 	input, err := normalizeSend(input, s.maxMessageBytes)
 	if err != nil {
@@ -234,6 +248,9 @@ func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error)
 func (s *Service) Receive(ctx context.Context, input ReceiveInput) (ReceiveOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return ReceiveOutput{}, err
+	}
+	if !s.requestBudget.take(s.now()) {
+		return ReceiveOutput{}, ErrRateLimited
 	}
 	envelope := input.Envelope
 	envelopeHash, err := s.validateEnvelope(envelope)
@@ -362,6 +379,9 @@ func (s *Service) Confirm(ctx context.Context, input ConfirmInput) (ConfirmOutpu
 	if err := ctx.Err(); err != nil {
 		return ConfirmOutput{}, err
 	}
+	if !s.requestBudget.take(s.now()) {
+		return ConfirmOutput{}, ErrRateLimited
+	}
 	ack := input.Acknowledgement
 	if ack.Version != 1 || !validID(ack.MessageID) || !validID(ack.Source) || ack.Destination != s.signer.Name() ||
 		!validSHA256(ack.EnvelopeSHA256) || ack.ReceiverAuditSequence == 0 || !validSHA256(ack.ReceiverAuditHead) {
@@ -411,6 +431,9 @@ func (s *Service) Confirm(ctx context.Context, input ConfirmInput) (ConfirmOutpu
 }
 
 func (s *Service) Inbox(_ context.Context, input InboxInput) (InboxOutput, error) {
+	if !s.requestBudget.take(s.now()) {
+		return InboxOutput{}, ErrRateLimited
+	}
 	release, err := s.beginOperation()
 	if err != nil {
 		return InboxOutput{}, err
@@ -424,9 +447,23 @@ func (s *Service) Inbox(_ context.Context, input InboxInput) (InboxOutput, error
 	}
 	s.mu.Lock()
 	messages := make([]Message, 0, input.Limit)
+	encodedBytes := inboxOutputBaseBytes
 	for _, message := range s.inbox {
 		if message.AuditSequence > input.AfterSequence {
+			encoded, encodeErr := json.Marshal(message)
+			if encodeErr != nil {
+				s.mu.Unlock()
+				return InboxOutput{}, fmt.Errorf("encode inbox message: %w", encodeErr)
+			}
+			separator := 0
+			if len(messages) > 0 {
+				separator = 1
+			}
+			if encodedBytes+separator+len(encoded) > MaxInboxOutputBytes {
+				break
+			}
 			messages = append(messages, message)
+			encodedBytes += separator + len(encoded)
 			if len(messages) == input.Limit {
 				break
 			}
@@ -441,10 +478,21 @@ func (s *Service) Inbox(_ context.Context, input InboxInput) (InboxOutput, error
 	if err != nil {
 		return InboxOutput{}, err
 	}
-	return InboxOutput{Messages: messages, AuditSequence: entry.Seq, AuditHead: entry.EntryHash}, nil
+	output := InboxOutput{Messages: messages, AuditSequence: entry.Seq, AuditHead: entry.EntryHash}
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		return InboxOutput{}, fmt.Errorf("encode inbox output: %w", err)
+	}
+	if len(encoded) > MaxInboxOutputBytes {
+		return InboxOutput{}, errors.New("inbox output exceeds protocol byte limit")
+	}
+	return output, nil
 }
 
 func (s *Service) Checkpoint() (identity.Checkpoint, error) {
+	if !s.requestBudget.take(s.now()) {
+		return identity.Checkpoint{}, ErrRateLimited
+	}
 	release, err := s.beginOperation()
 	if err != nil {
 		return identity.Checkpoint{}, err
@@ -490,6 +538,13 @@ func (s *Service) evaluate(ctx context.Context, messageID, requestID, conversati
 	}
 	if deterministicDecision == guard.DecisionDeny {
 		return deterministicDecision, deterministicReason, guard.Evaluation{Model: "not_called"}, entry, nil
+	}
+	if !s.guardBudget.take(s.now()) {
+		failed, appendErr := s.appendEvent(messageID, requestID, conversationID, eventGuardFailed, "failed", "guard_budget_exhausted", "", messageDetails(direction, source, destination, messageID))
+		if appendErr != nil {
+			return "", "", guard.Evaluation{}, audit.Entry{}, errors.Join(ErrRateLimited, appendErr)
+		}
+		return "", "", guard.Evaluation{}, failed, ErrRateLimited
 	}
 	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	stopShutdownCancel := context.AfterFunc(s.lifecycleCtx, cancel)
@@ -709,3 +764,5 @@ func guardErrorCode(err error) string {
 	}
 	return "provider_error"
 }
+
+const inboxOutputBaseBytes = len(`{"messages":[],"audit_sequence":18446744073709551615,"audit_head":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}`)

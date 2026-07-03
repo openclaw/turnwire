@@ -54,7 +54,7 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 	}
 	if model != "" {
 		cfg.Guard.Model = model
-		if strings.HasPrefix(model, "gpt-5.5") && cacheRetention == "" {
+		if model == "gpt-5.5-2026-04-23" && cacheRetention == "" {
 			cfg.Guard.PromptCacheRetention = "24h"
 		}
 	}
@@ -199,14 +199,20 @@ func runServeWithGuard(ctx context.Context, args []string, opts options, stdin i
 	for _, peer := range cfg.Identity.Peers {
 		peers[peer.Name] = peer.PublicKey
 	}
-	service, err := mailbox.New(mailbox.Options{Audit: log, Signer: signer, Peers: peers, Guard: modelGuard, Approvals: approvalStore, Policy: cfg.Guard.Policy, PolicyVersion: cfg.Guard.PolicyVersion, MaxMessageBytes: cfg.Limits.MaxMessageBytes, Timeout: timeout, MaxMessageAge: maxAge, MaxConcurrent: cfg.Limits.MaxConcurrent})
+	service, err := mailbox.New(mailbox.Options{
+		Audit: log, Signer: signer, Peers: peers, Guard: modelGuard, Approvals: approvalStore,
+		Policy: cfg.Guard.Policy, PolicyVersion: cfg.Guard.PolicyVersion,
+		MaxMessageBytes: cfg.Limits.MaxMessageBytes, Timeout: timeout, MaxMessageAge: maxAge,
+		MaxConcurrent: cfg.Limits.MaxConcurrent, MaxRequestsPerMinute: cfg.Limits.MaxRequestsPerMinute,
+		MaxGuardCallsPerHour: cfg.Limits.MaxGuardCallsPerHour,
+	})
 	if err != nil {
 		return err
 	}
 	if opts.verbose {
 		fmt.Fprintln(stderr, "turnwire: serving signed mailbox MCP over stdio")
 	}
-	serveErr := mcpserver.Run(ctx, service, buildinfo.Current().Version, stdin, stdout, cfg.Limits.MaxMessageBytes, cfg.Limits.MaxConcurrent)
+	serveErr := mcpserver.Run(ctx, service, buildinfo.Current().Version, stdin, stdout, cfg.Limits.MaxMessageBytes, cfg.Limits.MaxConcurrent, cfg.Limits.MaxRequestsPerMinute)
 	_ = service.Shutdown(context.Background())
 	if serveErr != nil {
 		if ctx.Err() != nil {

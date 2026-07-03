@@ -2,6 +2,8 @@
 
 package config
 
+import "errors"
+
 func writeConfigSecure(_ string, _ []byte, _ bool, _ DestinationGuard) error {
-	panic("writeConfigSecure called on an unsupported platform")
+	return errors.New("secure config writes are unsupported on this platform")
 }

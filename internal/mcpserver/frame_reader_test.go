@@ -178,7 +178,7 @@ func TestRunRejectsInvalidFrameBeforeSDKDecode(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			channel := &countingChannel{}
-			err := Run(context.Background(), channel, "test", bytes.NewReader(test.frame), io.Discard, 32, 1)
+			err := Run(context.Background(), channel, "test", bytes.NewReader(test.frame), io.Discard, 32, 1, 60)
 			if !errors.Is(err, test.want) && (err == nil || !strings.Contains(err.Error(), test.want.Error())) {
 				t.Fatalf("Run error = %v, want %v", err, test.want)
 			}
