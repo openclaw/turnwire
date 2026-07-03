@@ -2,68 +2,220 @@ package mailbox
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/openclaw/turnwire/internal/identity"
 )
 
 var (
-	ErrInvalidInput = errors.New("invalid relay input")
-	ErrConflict     = errors.New("request id conflicts with an existing message")
-	ErrBusy         = errors.New("relay is at its concurrency limit")
-	ErrClosed       = errors.New("relay service is shutting down")
+	ErrInvalidInput = errors.New("invalid channel input")
+	ErrConflict     = errors.New("identifier conflicts with an existing message")
+	ErrBusy         = errors.New("channel is at its concurrency limit")
+	ErrClosed       = errors.New("channel service is shutting down")
+	ErrUnauthorized = errors.New("message signature or peer identity is invalid")
 )
 
-type TalkInput struct {
-	Text           string `json:"text" jsonschema:"the exact text to send to the configured responder"`
-	RequestID      string `json:"request_id,omitempty" jsonschema:"optional idempotency key using 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen"`
-	ConversationID string `json:"conversation_id,omitempty" jsonschema:"optional correlation id using 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen"`
+type SendInput struct {
+	Destination    string `json:"destination" jsonschema:"configured peer identity"`
+	Text           string `json:"text" jsonschema:"exact text proposed for transfer"`
+	RequestID      string `json:"request_id,omitempty" jsonschema:"optional idempotency key"`
+	ConversationID string `json:"conversation_id,omitempty" jsonschema:"optional correlation ID"`
 }
 
-type TalkOutput struct {
-	ExchangeID     string `json:"exchange_id"`
-	RequestID      string `json:"request_id"`
+type Envelope struct {
+	Version             int    `json:"version"`
+	MessageID           string `json:"message_id"`
+	RequestID           string `json:"request_id"`
+	ConversationID      string `json:"conversation_id"`
+	Source              string `json:"source"`
+	Destination         string `json:"destination"`
+	CreatedAt           string `json:"created_at"`
+	Body                string `json:"body"`
+	BodySHA256          string `json:"body_sha256"`
+	PolicyVersion       string `json:"policy_version"`
+	GuardModel          string `json:"guard_model"`
+	GuardDecision       string `json:"guard_decision"`
+	SourceAuditSequence uint64 `json:"source_audit_sequence"`
+	SourceAuditHead     string `json:"source_audit_head"`
+	Signature           string `json:"signature"`
+}
+
+type unsignedEnvelope struct {
+	Version             int    `json:"version"`
+	MessageID           string `json:"message_id"`
+	RequestID           string `json:"request_id"`
+	ConversationID      string `json:"conversation_id"`
+	Source              string `json:"source"`
+	Destination         string `json:"destination"`
+	CreatedAt           string `json:"created_at"`
+	Body                string `json:"body"`
+	BodySHA256          string `json:"body_sha256"`
+	PolicyVersion       string `json:"policy_version"`
+	GuardModel          string `json:"guard_model"`
+	GuardDecision       string `json:"guard_decision"`
+	SourceAuditSequence uint64 `json:"source_audit_sequence"`
+	SourceAuditHead     string `json:"source_audit_head"`
+}
+
+func (e Envelope) unsigned() unsignedEnvelope {
+	return unsignedEnvelope{
+		Version: e.Version, MessageID: e.MessageID, RequestID: e.RequestID,
+		ConversationID: e.ConversationID, Source: e.Source, Destination: e.Destination,
+		CreatedAt: e.CreatedAt, Body: e.Body, BodySHA256: e.BodySHA256,
+		PolicyVersion: e.PolicyVersion, GuardModel: e.GuardModel, GuardDecision: e.GuardDecision,
+		SourceAuditSequence: e.SourceAuditSequence, SourceAuditHead: e.SourceAuditHead,
+	}
+}
+
+func signEnvelope(signer *identity.Signer, envelope *Envelope) error {
+	signature, err := signer.Sign(envelope.unsigned())
+	if err != nil {
+		return err
+	}
+	envelope.Signature = signature
+	return nil
+}
+
+func verifyEnvelope(publicKey string, envelope Envelope) error {
+	return identity.Verify(publicKey, envelope.unsigned(), envelope.Signature)
+}
+
+type SendOutput struct {
+	Status        string    `json:"status"`
+	MessageID     string    `json:"message_id"`
+	RequestID     string    `json:"request_id"`
+	BodySHA256    string    `json:"body_sha256"`
+	Decision      string    `json:"decision"`
+	ReasonCode    string    `json:"reason_code"`
+	Envelope      *Envelope `json:"envelope,omitempty"`
+	AuditSequence uint64    `json:"audit_sequence"`
+	AuditHead     string    `json:"audit_head"`
+}
+
+type ReceiveInput struct {
+	Envelope Envelope `json:"envelope"`
+}
+
+type Acknowledgement struct {
+	Version               int    `json:"version"`
+	MessageID             string `json:"message_id"`
+	Source                string `json:"source"`
+	Destination           string `json:"destination"`
+	EnvelopeSHA256        string `json:"envelope_sha256"`
+	ReceivedAt            string `json:"received_at"`
+	ReceiverAuditSequence uint64 `json:"receiver_audit_sequence"`
+	ReceiverAuditHead     string `json:"receiver_audit_head"`
+	Signature             string `json:"signature"`
+}
+
+type unsignedAcknowledgement struct {
+	Version               int    `json:"version"`
+	MessageID             string `json:"message_id"`
+	Source                string `json:"source"`
+	Destination           string `json:"destination"`
+	EnvelopeSHA256        string `json:"envelope_sha256"`
+	ReceivedAt            string `json:"received_at"`
+	ReceiverAuditSequence uint64 `json:"receiver_audit_sequence"`
+	ReceiverAuditHead     string `json:"receiver_audit_head"`
+}
+
+func (a Acknowledgement) unsigned() unsignedAcknowledgement {
+	return unsignedAcknowledgement{
+		Version: a.Version, MessageID: a.MessageID, Source: a.Source,
+		Destination: a.Destination, EnvelopeSHA256: a.EnvelopeSHA256,
+		ReceivedAt: a.ReceivedAt, ReceiverAuditSequence: a.ReceiverAuditSequence,
+		ReceiverAuditHead: a.ReceiverAuditHead,
+	}
+}
+
+func signAcknowledgement(signer *identity.Signer, ack *Acknowledgement) error {
+	signature, err := signer.Sign(ack.unsigned())
+	if err != nil {
+		return err
+	}
+	ack.Signature = signature
+	return nil
+}
+
+func verifyAcknowledgement(publicKey string, ack Acknowledgement) error {
+	return identity.Verify(publicKey, ack.unsigned(), ack.Signature)
+}
+
+type ReceiveOutput struct {
+	Status          string           `json:"status"`
+	MessageID       string           `json:"message_id"`
+	Decision        string           `json:"decision"`
+	ReasonCode      string           `json:"reason_code"`
+	Acknowledgement *Acknowledgement `json:"acknowledgement,omitempty"`
+	AuditSequence   uint64           `json:"audit_sequence"`
+	AuditHead       string           `json:"audit_head"`
+}
+
+type ConfirmInput struct {
+	Acknowledgement Acknowledgement `json:"acknowledgement"`
+}
+
+type ConfirmOutput struct {
+	Status        string `json:"status"`
+	MessageID     string `json:"message_id"`
+	AuditSequence uint64 `json:"audit_sequence"`
+	AuditHead     string `json:"audit_head"`
+}
+
+type InboxInput struct {
+	AfterSequence uint64 `json:"after_sequence,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
+}
+
+type Message struct {
+	MessageID      string `json:"message_id"`
 	ConversationID string `json:"conversation_id"`
-	Reply          string `json:"reply"`
-	CreatedAt      string `json:"created_at"`
-	RepliedAt      string `json:"replied_at"`
-	InputSHA256    string `json:"input_sha256"`
-	OutputSHA256   string `json:"output_sha256"`
+	Source         string `json:"source"`
+	Destination    string `json:"destination"`
+	Body           string `json:"body"`
+	BodySHA256     string `json:"body_sha256"`
+	ReceivedAt     string `json:"received_at"`
 	AuditSequence  uint64 `json:"audit_sequence"`
-	AuditHead      string `json:"audit_head"`
 }
 
-func normalizeInput(input TalkInput, maxInputBytes int) (TalkInput, error) {
-	if maxInputBytes <= 0 {
-		return TalkInput{}, fmt.Errorf("%w: server input limit is invalid", ErrInvalidInput)
+type InboxOutput struct {
+	Messages      []Message `json:"messages"`
+	AuditSequence uint64    `json:"audit_sequence"`
+	AuditHead     string    `json:"audit_head"`
+}
+
+func normalizeSend(input SendInput, maxBytes int) (SendInput, error) {
+	if !validText(input.Text, maxBytes) {
+		return SendInput{}, fmt.Errorf("%w: text is invalid", ErrInvalidInput)
 	}
-	if !utf8.ValidString(input.Text) || strings.ContainsRune(input.Text, '\x00') {
-		return TalkInput{}, fmt.Errorf("%w: text must be valid UTF-8 without NUL", ErrInvalidInput)
-	}
-	if strings.TrimSpace(input.Text) == "" {
-		return TalkInput{}, fmt.Errorf("%w: text is empty", ErrInvalidInput)
-	}
-	if len(input.Text) > maxInputBytes {
-		return TalkInput{}, fmt.Errorf("%w: text exceeds %d bytes", ErrInvalidInput, maxInputBytes)
+	if !validID(input.Destination) {
+		return SendInput{}, fmt.Errorf("%w: destination is invalid", ErrInvalidInput)
 	}
 	if input.RequestID == "" {
 		var err error
 		input.RequestID, err = newID()
 		if err != nil {
-			return TalkInput{}, err
+			return SendInput{}, err
 		}
 	} else if !validID(input.RequestID) {
-		return TalkInput{}, fmt.Errorf("%w: request_id has an invalid format", ErrInvalidInput)
+		return SendInput{}, fmt.Errorf("%w: request_id is invalid", ErrInvalidInput)
 	}
 	if input.ConversationID == "" {
-		// Deriving the default from request_id keeps automatic retries stable.
 		input.ConversationID = input.RequestID
 	} else if !validID(input.ConversationID) {
-		return TalkInput{}, fmt.Errorf("%w: conversation_id has an invalid format", ErrInvalidInput)
+		return SendInput{}, fmt.Errorf("%w: conversation_id is invalid", ErrInvalidInput)
 	}
 	return input, nil
+}
+
+func validText(text string, maxBytes int) bool {
+	return maxBytes > 0 && len(text) <= maxBytes && utf8.ValidString(text) &&
+		!strings.ContainsRune(text, '\x00') && strings.TrimSpace(text) != ""
 }
 
 func validID(value string) bool {
@@ -102,4 +254,9 @@ func newID() (string, error) {
 	dst[23] = '-'
 	hex.Encode(dst[24:36], raw[10:16])
 	return string(dst[:]), nil
+}
+
+func hashText(text string) string {
+	hash := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(hash[:])
 }

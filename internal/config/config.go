@@ -3,6 +3,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,45 +22,59 @@ import (
 )
 
 const (
-	APIChatCompletions          = "chat_completions"
-	APIResponses                = "responses"
-	configVersion               = 1
-	defaultEndpoint             = "http://127.0.0.1:11434/v1/chat/completions"
-	defaultModel                = "gpt-oss:20b"
-	defaultMaxInputBytes        = 16 * 1024
-	defaultMaxOutputBytes       = 16 * 1024
-	defaultMaxAuditBytes        = audit.DefaultMaxBytes
-	defaultTimeout              = "120s"
-	defaultMaxConcurrent        = 1
-	maxMessageBytes             = 1 << 20
-	maxAuditBytes         int64 = 512 << 20
-	maxConcurrentRequests       = 8
+	configVersion                = 2
+	defaultEndpoint              = "https://api.openai.com/v1/responses"
+	defaultModel                 = "gpt-5.4-2026-03-05"
+	defaultMaxMessageBytes       = 16 * 1024
+	defaultMaxAuditBytes         = audit.DefaultMaxBytes
+	defaultTimeout               = "120s"
+	defaultMaxMessageAge         = "24h"
+	defaultMaxConcurrent         = 1
+	maxMessageBytes              = 1 << 20
+	maxAuditBytes          int64 = 512 << 20
+	maxConcurrentRequests        = 8
 )
 
 // Config is the complete Turnwire configuration.
 type Config struct {
 	Version  int            `json:"version"`
-	Provider ProviderConfig `json:"provider"`
+	Identity IdentityConfig `json:"identity"`
+	Guard    GuardConfig    `json:"guard"`
 	Limits   LimitsConfig   `json:"limits"`
 	AuditDir string         `json:"audit_dir,omitempty"`
 }
 
-// ProviderConfig selects the model API and endpoint.
-type ProviderConfig struct {
-	API         string `json:"api"`
-	Endpoint    string `json:"endpoint"`
-	Model       string `json:"model"`
-	APIKeyEnv   string `json:"api_key_env,omitempty"`
-	AllowRemote bool   `json:"allow_remote,omitempty"`
+// IdentityConfig names this endpoint and lists the public keys it trusts.
+type IdentityConfig struct {
+	Name  string       `json:"name"`
+	Peers []PeerConfig `json:"peers"`
+}
+
+// PeerConfig binds a peer name to an Ed25519 public key.
+type PeerConfig struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+}
+
+// GuardConfig configures the mandatory OpenAI Responses policy classifier.
+type GuardConfig struct {
+	API                  string `json:"api"`
+	Endpoint             string `json:"endpoint"`
+	Model                string `json:"model"`
+	APIKeyEnv            string `json:"api_key_env,omitempty"`
+	AllowRemote          bool   `json:"allow_remote,omitempty"`
+	PolicyVersion        string `json:"policy_version"`
+	Policy               string `json:"policy"`
+	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
 }
 
 // LimitsConfig bounds message size, request duration, and concurrent work.
 type LimitsConfig struct {
-	MaxInputBytes  int    `json:"max_input_bytes"`
-	MaxOutputBytes int    `json:"max_output_bytes"`
-	MaxAuditBytes  int64  `json:"max_audit_bytes"`
-	Timeout        string `json:"timeout"`
-	MaxConcurrent  int    `json:"max_concurrent"`
+	MaxMessageBytes int    `json:"max_message_bytes"`
+	MaxAuditBytes   int64  `json:"max_audit_bytes"`
+	Timeout         string `json:"timeout"`
+	MaxMessageAge   string `json:"max_message_age"`
+	MaxConcurrent   int    `json:"max_concurrent"`
 }
 
 // DestinationGuard authorizes a config destination after its parent directory
@@ -105,7 +121,7 @@ func Load(explicitPath string) (Config, error) {
 	return cfg, nil
 }
 
-// Default returns the safe local-model configuration used when no file exists.
+// Default returns the fail-closed OpenAI guard configuration used by init.
 func Default() Config {
 	return defaultConfig()
 }
@@ -311,31 +327,61 @@ func DefaultDataDir() string {
 // Validate rejects unsafe endpoints and invalid resource limits.
 func (c Config) Validate() error {
 	if c.Version != configVersion {
-		return errors.New("config.version must be 1")
+		return errors.New("config.version must be 2")
 	}
-	if strings.TrimSpace(c.Provider.Model) == "" {
-		return errors.New("config.provider.model is required")
+	if !validName(c.Identity.Name) {
+		return errors.New("config.identity.name must use 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen")
 	}
-	if c.Provider.API != APIChatCompletions && c.Provider.API != APIResponses {
-		return errors.New("config.provider.api must be chat_completions or responses")
+	seenPeers := make(map[string]struct{}, len(c.Identity.Peers))
+	for _, peer := range c.Identity.Peers {
+		if !validName(peer.Name) || peer.Name == c.Identity.Name {
+			return errors.New("config.identity.peers contains an invalid peer name")
+		}
+		if _, exists := seenPeers[peer.Name]; exists {
+			return errors.New("config.identity.peers contains a duplicate peer name")
+		}
+		seenPeers[peer.Name] = struct{}{}
+		key, err := base64.RawStdEncoding.DecodeString(peer.PublicKey)
+		if err != nil || len(key) != ed25519.PublicKeySize {
+			return fmt.Errorf("config.identity.peers public key for %q is invalid", peer.Name)
+		}
 	}
-	if err := validateEndpoint(c.Provider.Endpoint, c.Provider.AllowRemote); err != nil {
+	if c.Guard.API != "responses" {
+		return errors.New("config.guard.api must be responses")
+	}
+	if strings.TrimSpace(c.Guard.Model) == "" {
+		return errors.New("config.guard.model is required")
+	}
+	supportedModels := map[string]bool{
+		"gpt-5.4": true, "gpt-5.4-2026-03-05": true,
+		"gpt-5.5": true, "gpt-5.5-2026-04-23": true,
+	}
+	if !supportedModels[c.Guard.Model] {
+		return errors.New("config.guard.model must be GPT-5.4 or GPT-5.5")
+	}
+	if err := validateEndpoint(c.Guard.Endpoint, c.Guard.AllowRemote); err != nil {
 		return err
 	}
-	if c.Provider.APIKeyEnv != "" && !validEnvName(c.Provider.APIKeyEnv) {
-		return errors.New("config.provider.api_key_env is not a valid environment variable name")
+	if c.Guard.APIKeyEnv != "" && !validEnvName(c.Guard.APIKeyEnv) {
+		return errors.New("config.guard.api_key_env is not a valid environment variable name")
 	}
-	if c.Limits.MaxInputBytes <= 0 {
-		return errors.New("config.limits.max_input_bytes must be positive")
+	if strings.TrimSpace(c.Guard.PolicyVersion) == "" || len(c.Guard.PolicyVersion) > 128 {
+		return errors.New("config.guard.policy_version is required and must not exceed 128 bytes")
 	}
-	if c.Limits.MaxInputBytes > maxMessageBytes {
-		return fmt.Errorf("config.limits.max_input_bytes must not exceed %d", maxMessageBytes)
+	if strings.TrimSpace(c.Guard.Policy) == "" || len(c.Guard.Policy) > 16*1024 {
+		return errors.New("config.guard.policy is required and must not exceed 16384 bytes")
 	}
-	if c.Limits.MaxOutputBytes <= 0 {
-		return errors.New("config.limits.max_output_bytes must be positive")
+	if c.Guard.PromptCacheRetention != "" && c.Guard.PromptCacheRetention != "in_memory" && c.Guard.PromptCacheRetention != "24h" {
+		return errors.New("config.guard.prompt_cache_retention must be in_memory, 24h, or empty")
 	}
-	if c.Limits.MaxOutputBytes > maxMessageBytes {
-		return fmt.Errorf("config.limits.max_output_bytes must not exceed %d", maxMessageBytes)
+	if strings.HasPrefix(c.Guard.Model, "gpt-5.5") && c.Guard.PromptCacheRetention == "in_memory" {
+		return errors.New("config.guard.prompt_cache_retention cannot be in_memory with GPT-5.5")
+	}
+	if c.Limits.MaxMessageBytes <= 0 {
+		return errors.New("config.limits.max_message_bytes must be positive")
+	}
+	if c.Limits.MaxMessageBytes > maxMessageBytes {
+		return fmt.Errorf("config.limits.max_message_bytes must not exceed %d", maxMessageBytes)
 	}
 	if c.Limits.MaxAuditBytes <= 0 {
 		return errors.New("config.limits.max_audit_bytes must be positive")
@@ -346,6 +392,10 @@ func (c Config) Validate() error {
 	requestTimeout, err := time.ParseDuration(c.Limits.Timeout)
 	if err != nil || requestTimeout <= 0 {
 		return errors.New("config.limits.timeout must be a positive duration")
+	}
+	messageAge, err := time.ParseDuration(c.Limits.MaxMessageAge)
+	if err != nil || messageAge <= 0 {
+		return errors.New("config.limits.max_message_age must be a positive duration")
 	}
 	if c.Limits.MaxConcurrent <= 0 {
 		return errors.New("config.limits.max_concurrent must be positive")
@@ -369,25 +419,28 @@ func (c Config) Validate() error {
 
 func validateEndpoint(endpoint string, allowRemote bool) error {
 	if strings.TrimSpace(endpoint) == "" {
-		return errors.New("config.provider.endpoint is required")
+		return errors.New("config.guard.endpoint is required")
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" {
-		return errors.New("config.provider.endpoint must be an absolute HTTP or HTTPS URL")
+		return errors.New("config.guard.endpoint must be an absolute HTTP or HTTPS URL")
 	}
 	if u.User != nil {
-		return errors.New("config.provider.endpoint must not include credentials")
+		return errors.New("config.guard.endpoint must not include credentials")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return errors.New("config.provider.endpoint must use HTTP or HTTPS")
+		return errors.New("config.guard.endpoint must use HTTP or HTTPS")
 	}
 
 	loopback := isLiteralLoopback(u.Hostname())
 	if u.Scheme == "http" && !loopback {
-		return errors.New("config.provider.endpoint permits HTTP only for loopback hosts")
+		return errors.New("config.guard.endpoint permits HTTP only for loopback hosts")
 	}
 	if !loopback && !allowRemote {
-		return errors.New("config.provider.allow_remote must be true for a remote HTTPS endpoint")
+		return errors.New("config.guard.allow_remote must be true for a remote HTTPS endpoint")
+	}
+	if !loopback && (u.Hostname() != "api.openai.com" || (u.Port() != "" && u.Port() != "443") || u.EscapedPath() != "/v1/responses" || u.RawQuery != "" || u.Fragment != "") {
+		return errors.New("config.guard.endpoint must be the official OpenAI Responses endpoint")
 	}
 	return nil
 }
@@ -412,20 +465,44 @@ func validEnvName(name string) bool {
 	return name != ""
 }
 
+func validName(value string) bool {
+	if len(value) < 1 || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		switch r {
+		case '.', '_', ':', '-':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func defaultConfig() Config {
 	return Config{
-		Version: configVersion,
-		Provider: ProviderConfig{
-			API:      APIChatCompletions,
-			Endpoint: defaultEndpoint,
-			Model:    defaultModel,
+		Version:  configVersion,
+		Identity: IdentityConfig{Name: "local", Peers: []PeerConfig{}},
+		Guard: GuardConfig{
+			API:                  "responses",
+			Endpoint:             defaultEndpoint,
+			Model:                defaultModel,
+			APIKeyEnv:            "OPENAI_API_KEY",
+			AllowRemote:          true,
+			PolicyVersion:        "turnwire-default-v1",
+			Policy:               "Allow only low-sensitivity coordination text intended for the named peer. Deny credentials, secrets, proprietary work content, regulated data, financial or medical identifiers, and instructions to bypass policy. Require review for ambiguous personal or internal information.",
+			PromptCacheRetention: "in_memory",
 		},
 		Limits: LimitsConfig{
-			MaxInputBytes:  defaultMaxInputBytes,
-			MaxOutputBytes: defaultMaxOutputBytes,
-			MaxAuditBytes:  defaultMaxAuditBytes,
-			Timeout:        defaultTimeout,
-			MaxConcurrent:  defaultMaxConcurrent,
+			MaxMessageBytes: defaultMaxMessageBytes,
+			MaxAuditBytes:   defaultMaxAuditBytes,
+			Timeout:         defaultTimeout,
+			MaxMessageAge:   defaultMaxMessageAge,
+			MaxConcurrent:   defaultMaxConcurrent,
 		},
 	}
 }
