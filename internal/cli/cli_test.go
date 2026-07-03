@@ -648,6 +648,59 @@ func TestInitRemoteEndpointRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestInitOpenAIProviderPreset(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.json")
+	code, _, stderr := invoke(t,
+		"--config", configPath,
+		"--data-dir", filepath.Join(root, "state"),
+		"init", "--provider", "openai",
+	)
+	if code != 0 || stderr != "" {
+		t.Fatalf("init: code=%d stderr=%q", code, stderr)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.API != config.APIResponses || cfg.Provider.Endpoint != "https://api.openai.com/v1/responses" ||
+		cfg.Provider.Model != "gpt-5.5" || cfg.Provider.APIKeyEnv != "OPENAI_API_KEY" || !cfg.Provider.AllowRemote {
+		t.Fatalf("provider = %#v", cfg.Provider)
+	}
+}
+
+func TestInitOpenAIProviderPresetAllowsGPT54(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.json")
+	code, _, stderr := invoke(t,
+		"--config", configPath,
+		"--data-dir", filepath.Join(root, "state"),
+		"init", "--provider", "openai", "--model", "gpt-5.4",
+	)
+	if code != 0 || stderr != "" {
+		t.Fatalf("init: code=%d stderr=%q", code, stderr)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.API != config.APIResponses || cfg.Provider.Model != "gpt-5.4" {
+		t.Fatalf("provider = %#v", cfg.Provider)
+	}
+}
+
+func TestInitOpenAIProviderPresetRejectsEndpointOverride(t *testing.T) {
+	root := t.TempDir()
+	code, _, stderr := invoke(t,
+		"--config", filepath.Join(root, "config.json"),
+		"--data-dir", filepath.Join(root, "state"),
+		"init", "--provider", "openai", "--endpoint", "https://example.com/v1/responses",
+	)
+	if code != 2 || !strings.Contains(stderr, "cannot be combined") {
+		t.Fatalf("init: code=%d stderr=%q", code, stderr)
+	}
+}
+
 func TestForcedInitDoesNotReplaceConfigWhenAuditIsLocked(t *testing.T) {
 	configPath, dataDir := initializeTestMailbox(t)
 	cfg, err := config.Load(configPath)

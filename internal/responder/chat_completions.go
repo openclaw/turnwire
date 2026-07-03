@@ -28,6 +28,7 @@ var (
 )
 
 type HTTPConfig struct {
+	API            string
 	Endpoint       string
 	Model          string
 	APIKeyEnv      string
@@ -36,6 +37,7 @@ type HTTPConfig struct {
 }
 
 type HTTP struct {
+	api            string
 	endpoint       *url.URL
 	model          string
 	apiKeyEnv      string
@@ -44,6 +46,12 @@ type HTTP struct {
 }
 
 func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
+	if cfg.API == "" {
+		cfg.API = "chat_completions"
+	}
+	if cfg.API != "chat_completions" && cfg.API != "responses" {
+		return nil, fmt.Errorf("unsupported responder API")
+	}
 	endpoint, err := url.Parse(cfg.Endpoint)
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" || endpoint.Hostname() == "" {
 		return nil, fmt.Errorf("invalid responder endpoint")
@@ -72,6 +80,7 @@ func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
 	}
 
 	return &HTTP{
+		api:            cfg.API,
 		endpoint:       endpoint,
 		model:          cfg.Model,
 		apiKeyEnv:      cfg.APIKeyEnv,
@@ -91,6 +100,13 @@ type chatRequest struct {
 	Stream   bool          `json:"stream"`
 }
 
+type responsesRequest struct {
+	Model        string `json:"model"`
+	Instructions string `json:"instructions"`
+	Input        string `json:"input"`
+	Store        bool   `json:"store"`
+}
+
 type chatResponseEnvelope struct {
 	Choices json.RawMessage `json:"choices"`
 }
@@ -99,15 +115,24 @@ type chatChoice struct {
 	Message chatMessage `json:"message"`
 }
 
+type responsesEnvelope struct {
+	Status string          `json:"status"`
+	Output json.RawMessage `json:"output"`
+}
+
+type responseOutputItem struct {
+	Type    string                `json:"type"`
+	Role    string                `json:"role"`
+	Content []responseContentPart `json:"content"`
+}
+
+type responseContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 func (r *HTTP) Respond(ctx context.Context, text string) (string, error) {
-	body, err := json.Marshal(chatRequest{
-		Model: r.model,
-		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: text},
-		},
-		Stream: false,
-	})
+	body, err := r.requestBody(text)
 	if err != nil {
 		return "", fmt.Errorf("encode responder request: %w", err)
 	}
@@ -148,11 +173,7 @@ func (r *HTTP) Respond(ctx context.Context, text string) (string, error) {
 		return "", ErrInvalidReply
 	}
 
-	var decoded chatResponseEnvelope
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return "", fmt.Errorf("decode responder response: %w", ErrInvalidReply)
-	}
-	reply, err := firstChoiceContent(decoded.Choices)
+	reply, err := r.replyText(raw)
 	if err != nil {
 		return "", ErrInvalidReply
 	}
@@ -163,6 +184,67 @@ func (r *HTTP) Respond(ctx context.Context, text string) (string, error) {
 		return "", ErrReplyTooLarge
 	}
 	return reply, nil
+}
+
+func (r *HTTP) requestBody(text string) ([]byte, error) {
+	if r.api == "responses" {
+		return json.Marshal(responsesRequest{
+			Model:        r.model,
+			Instructions: systemPrompt,
+			Input:        text,
+			Store:        false,
+		})
+	}
+	return json.Marshal(chatRequest{
+		Model: r.model,
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: text},
+		},
+		Stream: false,
+	})
+}
+
+func (r *HTTP) replyText(raw []byte) (string, error) {
+	if r.api == "responses" {
+		var decoded responsesEnvelope
+		if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Status != "completed" {
+			return "", ErrInvalidReply
+		}
+		return firstResponseText(decoded.Output)
+	}
+	var decoded chatResponseEnvelope
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return "", ErrInvalidReply
+	}
+	return firstChoiceContent(decoded.Choices)
+}
+
+func firstResponseText(raw json.RawMessage) (string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return "", err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '[' {
+		return "", ErrInvalidReply
+	}
+	for decoder.More() {
+		var item responseOutputItem
+		if err := decoder.Decode(&item); err != nil {
+			return "", err
+		}
+		if item.Type != "message" || item.Role != "assistant" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "output_text" {
+				return part.Text, nil
+			}
+		}
+	}
+	return "", ErrInvalidReply
 }
 
 // firstChoiceContent decodes only the first choice. The enclosing Unmarshal

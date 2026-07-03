@@ -25,9 +25,11 @@ const probeText = "Turnwire connectivity probe. Reply with OK."
 func runInit(args []string, opts options, stdout io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	var force, allowRemote bool
-	var endpoint, model, apiKeyEnv string
+	var provider, api, endpoint, model, apiKeyEnv string
 	flags.BoolVar(&force, "force", false, "replace an existing configuration")
-	flags.StringVar(&endpoint, "endpoint", "", "chat-completions endpoint")
+	flags.StringVar(&provider, "provider", "", "built-in provider preset")
+	flags.StringVar(&api, "api", "", "model API")
+	flags.StringVar(&endpoint, "endpoint", "", "model API endpoint")
 	flags.StringVar(&model, "model", "", "model name")
 	flags.StringVar(&apiKeyEnv, "api-key-env", "", "API key environment variable")
 	flags.BoolVar(&allowRemote, "allow-remote", false, "permit a remote HTTPS endpoint")
@@ -40,6 +42,22 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 	}
 
 	cfg := config.Default()
+	if provider != "" && provider != "openai" {
+		return usageError("unsupported provider preset %q", provider)
+	}
+	if provider == "openai" {
+		if api != "" || endpoint != "" {
+			return usageError("--provider openai cannot be combined with --api or --endpoint")
+		}
+		cfg.Provider.API = config.APIResponses
+		cfg.Provider.Endpoint = "https://api.openai.com/v1/responses"
+		cfg.Provider.Model = "gpt-5.5"
+		cfg.Provider.APIKeyEnv = "OPENAI_API_KEY"
+		cfg.Provider.AllowRemote = true
+	}
+	if api != "" {
+		cfg.Provider.API = api
+	}
 	if endpoint != "" {
 		cfg.Provider.Endpoint = endpoint
 	}
@@ -49,7 +67,9 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 	if apiKeyEnv != "" {
 		cfg.Provider.APIKeyEnv = apiKeyEnv
 	}
-	cfg.Provider.AllowRemote = allowRemote
+	if allowRemote {
+		cfg.Provider.AllowRemote = true
+	}
 
 	configPath := opts.configPath
 	if configPath == "" {
@@ -153,6 +173,7 @@ func runServeWithResponder(
 	defer log.Close()
 
 	model, err := newResponder(responder.HTTPConfig{
+		API:            cfg.Provider.API,
 		Endpoint:       cfg.Provider.Endpoint,
 		Model:          cfg.Provider.Model,
 		APIKeyEnv:      cfg.Provider.APIKeyEnv,
@@ -343,6 +364,7 @@ func safeDoctorError(name string, err error) string {
 
 func probeProvider(ctx context.Context, cfg config.Config) error {
 	model, err := responder.NewHTTP(responder.HTTPConfig{
+		API:            cfg.Provider.API,
 		Endpoint:       cfg.Provider.Endpoint,
 		Model:          cfg.Provider.Model,
 		APIKeyEnv:      cfg.Provider.APIKeyEnv,

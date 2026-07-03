@@ -224,8 +224,10 @@ const initHelp = `Usage:
 
 Flags:
   --force            Replace an existing configuration
-  --endpoint URL     Chat Completions-compatible endpoint
-  --model NAME       Model name
+  --provider NAME    Built-in provider preset (openai)
+  --api NAME         Model API: chat_completions or responses
+  --endpoint URL     Model API endpoint
+  --model NAME       Model name (for example, gpt-5.5 or gpt-5.4)
   --api-key-env NAME Environment variable containing the provider API key
   --allow-remote     Permit a remote HTTPS endpoint
 `

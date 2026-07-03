@@ -20,6 +20,8 @@ import (
 )
 
 const (
+	APIChatCompletions          = "chat_completions"
+	APIResponses                = "responses"
 	configVersion               = 1
 	defaultEndpoint             = "http://127.0.0.1:11434/v1/chat/completions"
 	defaultModel                = "gpt-oss:20b"
@@ -41,8 +43,9 @@ type Config struct {
 	AuditDir string         `json:"audit_dir,omitempty"`
 }
 
-// ProviderConfig selects the Chat Completions-compatible endpoint.
+// ProviderConfig selects the model API and endpoint.
 type ProviderConfig struct {
+	API         string `json:"api"`
 	Endpoint    string `json:"endpoint"`
 	Model       string `json:"model"`
 	APIKeyEnv   string `json:"api_key_env,omitempty"`
@@ -313,6 +316,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Provider.Model) == "" {
 		return errors.New("config.provider.model is required")
 	}
+	if c.Provider.API != APIChatCompletions && c.Provider.API != APIResponses {
+		return errors.New("config.provider.api must be chat_completions or responses")
+	}
 	if err := validateEndpoint(c.Provider.Endpoint, c.Provider.AllowRemote); err != nil {
 		return err
 	}
@@ -410,6 +416,7 @@ func defaultConfig() Config {
 	return Config{
 		Version: configVersion,
 		Provider: ProviderConfig{
+			API:      APIChatCompletions,
 			Endpoint: defaultEndpoint,
 			Model:    defaultModel,
 		},

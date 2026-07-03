@@ -25,6 +25,9 @@ func TestLoadMissingDefaultUsesSafeDefaults(t *testing.T) {
 	if cfg.Provider.Endpoint != "http://127.0.0.1:11434/v1/chat/completions" {
 		t.Fatalf("Endpoint = %q", cfg.Provider.Endpoint)
 	}
+	if cfg.Provider.API != APIChatCompletions {
+		t.Fatalf("API = %q", cfg.Provider.API)
+	}
 	if cfg.Provider.AllowRemote {
 		t.Fatal("AllowRemote = true, want false")
 	}
@@ -588,6 +591,7 @@ func TestValidateFields(t *testing.T) {
 	}{
 		{name: "version", mutate: func(c *Config) { c.Version = 2 }},
 		{name: "model", mutate: func(c *Config) { c.Provider.Model = "  " }},
+		{name: "API", mutate: func(c *Config) { c.Provider.API = "completions" }},
 		{name: "API key environment name", mutate: func(c *Config) { c.Provider.APIKeyEnv = "BAD-NAME" }},
 		{name: "input bytes", mutate: func(c *Config) { c.Limits.MaxInputBytes = 0 }},
 		{name: "input bytes too large", mutate: func(c *Config) { c.Limits.MaxInputBytes = maxMessageBytes + 1 }},
