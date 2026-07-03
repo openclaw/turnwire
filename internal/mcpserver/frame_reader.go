@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// The envelope allowance covers JSON-RPC metadata and non-talk MCP methods.
+	// The allowance covers JSON-RPC metadata and non-message MCP methods.
 	// Six bytes per input byte covers the worst-case JSON \u00XX representation.
 	frameEnvelopeOverheadBytes = 64 * 1024
 	jsonEscapeExpansion        = 6

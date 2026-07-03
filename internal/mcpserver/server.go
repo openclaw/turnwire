@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openclaw/turnwire/internal/audit"
+	"github.com/openclaw/turnwire/internal/identity"
 	"github.com/openclaw/turnwire/internal/mailbox"
 )
 
@@ -21,9 +23,13 @@ const transportControlHeadroom = 4
 // its sentinel, but exposes its structured JSON-RPC error through jsonrpc.
 const sdkServerClosingCode int64 = -32004
 
-// Talker handles one logged text exchange with the paired language model.
-type Talker interface {
-	Talk(context.Context, mailbox.TalkInput) (mailbox.TalkOutput, error)
+// Channel exposes the complete signed mailbox protocol.
+type Channel interface {
+	Send(context.Context, mailbox.SendInput) (mailbox.SendOutput, error)
+	Receive(context.Context, mailbox.ReceiveInput) (mailbox.ReceiveOutput, error)
+	Confirm(context.Context, mailbox.ConfirmInput) (mailbox.ConfirmOutput, error)
+	Inbox(context.Context, mailbox.InboxInput) (mailbox.InboxOutput, error)
+	Checkpoint() (identity.Checkpoint, error)
 }
 
 type shutdowner interface {
@@ -31,13 +37,13 @@ type shutdowner interface {
 }
 
 // New creates the text-only Turnwire MCP server.
-func New(t Talker, version string) *mcp.Server {
+func New(channel Channel, version string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "turnwire",
 		Title:   "Turnwire",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "Send text to the paired language model with talk. Both the request and reply are durably logged.",
+		Instructions: "Transfer only signed, policy-guarded text envelopes between configured Turnwire peers. Carry send_message envelopes to receive_message on the destination, then carry acknowledgements back to confirm_delivery.",
 		// Override the SDK's historical default logging capability. Turnwire
 		// exposes only its explicitly registered tool over MCP.
 		Capabilities: &mcp.ServerCapabilities{},
@@ -46,9 +52,9 @@ func New(t Talker, version string) *mcp.Server {
 	nonDestructive := false
 	openWorld := true
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "talk",
-		Title:       "Talk",
-		Description: "Send text to the paired language model and return its reply. Both directions are durably logged.",
+		Name:        "send_message",
+		Title:       "Send message",
+		Description: "Guard and sign text for one configured peer. Transfer only a returned released envelope; review_required needs local CLI approval.",
 		Annotations: &mcp.ToolAnnotations{
 			// Every call appends audit records, so it is neither read-only nor idempotent.
 			ReadOnlyHint:    false,
@@ -56,22 +62,78 @@ func New(t Talker, version string) *mcp.Server {
 			IdempotentHint:  false,
 			OpenWorldHint:   &openWorld,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mailbox.TalkInput) (*mcp.CallToolResult, mailbox.TalkOutput, error) {
-		output, err := t.Talk(ctx, input)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mailbox.SendInput) (*mcp.CallToolResult, mailbox.SendOutput, error) {
+		output, err := channel.Send(ctx, input)
 		if err != nil {
-			return nil, mailbox.TalkOutput{}, publicToolError(err)
+			return nil, mailbox.SendOutput{}, publicToolError(err)
 		}
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: output.Reply}},
-		}, output, nil
+		return textResult(output), output, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "receive_message", Title: "Receive message",
+		Description: "Verify a configured peer's signature, run the inbound guards, and commit the accepted message. Return a signed acknowledgement.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &nonDestructive, IdempotentHint: false, OpenWorldHint: &openWorld},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mailbox.ReceiveInput) (*mcp.CallToolResult, mailbox.ReceiveOutput, error) {
+		output, err := channel.Receive(ctx, input)
+		if err != nil {
+			return nil, mailbox.ReceiveOutput{}, publicToolError(err)
+		}
+		return textResult(output), output, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "confirm_delivery", Title: "Confirm delivery",
+		Description: "Verify and record the destination peer's signed acknowledgement for a released message.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &nonDestructive, IdempotentHint: false, OpenWorldHint: &openWorld},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mailbox.ConfirmInput) (*mcp.CallToolResult, mailbox.ConfirmOutput, error) {
+		output, err := channel.Confirm(ctx, input)
+		if err != nil {
+			return nil, mailbox.ConfirmOutput{}, publicToolError(err)
+		}
+		return textResult(output), output, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "list_messages", Title: "List messages",
+		Description: "Read guard-accepted messages from this endpoint's inbox. Every read is audited.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &nonDestructive, IdempotentHint: false, OpenWorldHint: &openWorld},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input mailbox.InboxInput) (*mcp.CallToolResult, mailbox.InboxOutput, error) {
+		output, err := channel.Inbox(ctx, input)
+		if err != nil {
+			return nil, mailbox.InboxOutput{}, publicToolError(err)
+		}
+		return textResult(output), output, nil
+	})
+
+	type checkpointInput struct{}
+	closedWorld := false
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "audit_checkpoint", Title: "Audit checkpoint",
+		Description: "Return a signed checkpoint of the current local audit-chain head for independent storage and reconciliation.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: &nonDestructive, IdempotentHint: false, OpenWorldHint: &closedWorld},
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ checkpointInput) (*mcp.CallToolResult, identity.Checkpoint, error) {
+		output, err := channel.Checkpoint()
+		if err != nil {
+			return nil, identity.Checkpoint{}, publicToolError(err)
+		}
+		return textResult(output), output, nil
 	})
 
 	return server
 }
 
+func textResult(value any) *mcp.CallToolResult {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: `{"status":"serialization_failed"}`}}, IsError: true}
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}
+}
+
 // publicToolError is the privacy boundary for failures returned over MCP.
 // Underlying errors may contain provider URLs, environment-variable names,
-// filesystem paths, or other responder-side details and must remain local.
+// filesystem paths, or other guard-side details and must remain local.
 func publicToolError(err error) error {
 	switch {
 	case errors.Is(err, mailbox.ErrInvalidInput):
@@ -82,6 +144,8 @@ func publicToolError(err error) error {
 		return errors.New("busy: relay is at capacity; retry later")
 	case errors.Is(err, mailbox.ErrClosed):
 		return errors.New("unavailable: relay is shutting down")
+	case errors.Is(err, mailbox.ErrUnauthorized):
+		return errors.New("unauthorized: peer identity or signature is invalid")
 	case errors.Is(err, audit.ErrQuotaExceeded):
 		return errors.New("unavailable: audit log quota reached")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -98,7 +162,7 @@ func publicToolError(err error) error {
 // validated before the MCP SDK decodes them. If t also implements Shutdown,
 // Run starts that shutdown as soon as transport teardown is observed and waits
 // for both the MCP session and relay workers before returning.
-func Run(ctx context.Context, t Talker, version string, stdin io.Reader, stdout io.Writer, maxInputBytes, maxConcurrent int) error {
+func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, maxInputBytes, maxConcurrent int) error {
 	if stdin == nil {
 		return errors.New("MCP input is required")
 	}
@@ -124,7 +188,7 @@ func Run(ctx context.Context, t Talker, version string, stdin io.Reader, stdout 
 	reader := newTeardownReadCloser(stream)
 	runDone := make(chan struct{})
 	var shutdownDone <-chan error
-	if lifecycle, ok := t.(shutdowner); ok {
+	if lifecycle, ok := channel.(shutdowner); ok {
 		done := make(chan error, 1)
 		shutdownDone = done
 		go func() {
@@ -137,7 +201,7 @@ func Run(ctx context.Context, t Talker, version string, stdin io.Reader, stdout 
 		}()
 	}
 
-	runErr := New(t, version).Run(ctx, &mcp.IOTransport{
+	runErr := New(channel, version).Run(ctx, &mcp.IOTransport{
 		Reader: reader,
 		Writer: stream,
 	})

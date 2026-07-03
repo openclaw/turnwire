@@ -65,23 +65,25 @@ type Event struct {
 	Status         string
 	ErrorCode      string
 	Text           string
+	Details        map[string]string
 }
 
 // Entry is the durable representation of an audit event.
 type Entry struct {
-	Seq            uint64 `json:"seq"`
-	EventID        string `json:"event_id"`
-	ExchangeID     string `json:"exchange_id"`
-	RequestID      string `json:"request_id"`
-	ConversationID string `json:"conversation_id"`
-	Type           string `json:"type"`
-	Status         string `json:"status"`
-	ErrorCode      string `json:"error_code"`
-	Timestamp      string `json:"timestamp"`
-	Text           string `json:"text"`
-	TextSHA256     string `json:"text_sha256"`
-	PreviousHash   string `json:"previous_hash"`
-	EntryHash      string `json:"entry_hash"`
+	Seq            uint64            `json:"seq"`
+	EventID        string            `json:"event_id"`
+	ExchangeID     string            `json:"exchange_id"`
+	RequestID      string            `json:"request_id"`
+	ConversationID string            `json:"conversation_id"`
+	Type           string            `json:"type"`
+	Status         string            `json:"status"`
+	ErrorCode      string            `json:"error_code"`
+	Timestamp      string            `json:"timestamp"`
+	Text           string            `json:"text"`
+	TextSHA256     string            `json:"text_sha256"`
+	Details        map[string]string `json:"details,omitempty"`
+	PreviousHash   string            `json:"previous_hash"`
+	EntryHash      string            `json:"entry_hash"`
 }
 
 // EntryReference identifies one verified entry in the append-only log without
@@ -95,18 +97,19 @@ type EntryReference struct {
 }
 
 type hashableEntry struct {
-	Seq            uint64 `json:"seq"`
-	EventID        string `json:"event_id"`
-	ExchangeID     string `json:"exchange_id"`
-	RequestID      string `json:"request_id"`
-	ConversationID string `json:"conversation_id"`
-	Type           string `json:"type"`
-	Status         string `json:"status"`
-	ErrorCode      string `json:"error_code"`
-	Timestamp      string `json:"timestamp"`
-	Text           string `json:"text"`
-	TextSHA256     string `json:"text_sha256"`
-	PreviousHash   string `json:"previous_hash"`
+	Seq            uint64            `json:"seq"`
+	EventID        string            `json:"event_id"`
+	ExchangeID     string            `json:"exchange_id"`
+	RequestID      string            `json:"request_id"`
+	ConversationID string            `json:"conversation_id"`
+	Type           string            `json:"type"`
+	Status         string            `json:"status"`
+	ErrorCode      string            `json:"error_code"`
+	Timestamp      string            `json:"timestamp"`
+	Text           string            `json:"text"`
+	TextSHA256     string            `json:"text_sha256"`
+	Details        map[string]string `json:"details,omitempty"`
+	PreviousHash   string            `json:"previous_hash"`
 }
 
 // Log serializes appends from all goroutines and holds an exclusive OS lock for
@@ -413,6 +416,24 @@ func (l *Log) AliasesEntry(parent *os.File, name string) (bool, error) {
 	return os.SameFile(auditInfo, candidateInfo), nil
 }
 
+// AliasesDirectory reports whether directory is the held audit/state
+// directory. The caller must retain the descriptor through its mutation.
+func (l *Log) AliasesDirectory(directory *os.File) (bool, error) {
+	if directory == nil {
+		return false, errors.New("candidate directory is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.readyLocked(); err != nil {
+		return false, err
+	}
+	info, err := directory.Stat()
+	if err != nil {
+		return false, fmt.Errorf("inspect candidate directory: %w", err)
+	}
+	return os.SameFile(l.directoryInfo, info), nil
+}
+
 // Append durably adds an event. It returns only after the entry has been
 // written and fsynced. A write or sync failure makes this handle unusable,
 // because durability is then uncertain; reopen the log to recover safely.
@@ -446,6 +467,7 @@ func (l *Log) AppendWithReference(event Event) (Entry, EntryReference, error) {
 		Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
 		Text:           event.Text,
 		TextSHA256:     hex.EncodeToString(textHash[:]),
+		Details:        cloneDetails(event.Details),
 		PreviousHash:   l.head,
 	}
 	entryHash, err := calculateEntryHash(entry)
@@ -491,6 +513,16 @@ func (l *Log) AppendWithReference(event Event) (Entry, EntryReference, error) {
 	l.head = entry.EntryHash
 	l.size += lineSize
 	return entry, reference, nil
+}
+
+// Head returns the current verified sequence and hash-chain head.
+func (l *Log) Head() (uint64, string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.readyLocked(); err != nil {
+		return 0, "", err
+	}
+	return l.seq, l.head, nil
 }
 
 // ReadAll reads and verifies the complete chain under the writer mutex.
@@ -669,7 +701,29 @@ func validateEvent(event Event) error {
 	if !utf8.ValidString(event.Text) {
 		return errors.New("text must be valid UTF-8")
 	}
+	if len(event.Details) > 32 {
+		return errors.New("audit details must not exceed 32 fields")
+	}
+	for key, value := range event.Details {
+		if key == "" || len(key) > 64 || !utf8.ValidString(key) {
+			return errors.New("audit detail key is invalid")
+		}
+		if len(value) > 4096 || !utf8.ValidString(value) {
+			return fmt.Errorf("audit detail %q is invalid", key)
+		}
+	}
 	return nil
+}
+
+func cloneDetails(details map[string]string) map[string]string {
+	if len(details) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(details))
+	for key, value := range details {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func readAndVerify(file *os.File) ([]Entry, error) {
@@ -803,6 +857,7 @@ func verifyEntry(entry Entry, expectedSeq uint64, previousHash string) error {
 		Status:         entry.Status,
 		ErrorCode:      entry.ErrorCode,
 		Text:           entry.Text,
+		Details:        entry.Details,
 	}); err != nil {
 		return err
 	}
@@ -846,6 +901,7 @@ func calculateEntryHash(entry Entry) (string, error) {
 		Timestamp:      entry.Timestamp,
 		Text:           entry.Text,
 		TextSHA256:     entry.TextSHA256,
+		Details:        entry.Details,
 		PreviousHash:   entry.PreviousHash,
 	})
 	if err != nil {

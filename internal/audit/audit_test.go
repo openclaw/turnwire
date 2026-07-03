@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -112,7 +113,7 @@ func TestEntryReferencesSupportVerifiedIndexedReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != second {
+	if !reflect.DeepEqual(got, second) {
 		t.Fatalf("referenced entry = %#v, want %#v", got, second)
 	}
 
@@ -679,7 +680,7 @@ func TestQuotaRejectsBeforeWriteWithoutPoisoningHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadReference after clean quota rejection: %v", err)
 	}
-	if replayed != entry {
+	if !reflect.DeepEqual(replayed, entry) {
 		t.Fatalf("ReadReference after quota rejection = %#v, want %#v", replayed, entry)
 	}
 }

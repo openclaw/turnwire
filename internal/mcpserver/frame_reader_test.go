@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/openclaw/turnwire/internal/identity"
 	"github.com/openclaw/turnwire/internal/mailbox"
 )
 
@@ -137,14 +138,24 @@ func TestBoundedFrameReaderAcceptsSurrogatePair(t *testing.T) {
 	}
 }
 
-type countingTalker struct {
+type countingChannel struct {
 	calls atomic.Int32
 }
 
-func (t *countingTalker) Talk(context.Context, mailbox.TalkInput) (mailbox.TalkOutput, error) {
+func (t *countingChannel) Send(context.Context, mailbox.SendInput) (mailbox.SendOutput, error) {
 	t.calls.Add(1)
-	return mailbox.TalkOutput{}, nil
+	return mailbox.SendOutput{}, nil
 }
+func (*countingChannel) Receive(context.Context, mailbox.ReceiveInput) (mailbox.ReceiveOutput, error) {
+	return mailbox.ReceiveOutput{}, nil
+}
+func (*countingChannel) Confirm(context.Context, mailbox.ConfirmInput) (mailbox.ConfirmOutput, error) {
+	return mailbox.ConfirmOutput{}, nil
+}
+func (*countingChannel) Inbox(context.Context, mailbox.InboxInput) (mailbox.InboxOutput, error) {
+	return mailbox.InboxOutput{}, nil
+}
+func (*countingChannel) Checkpoint() (identity.Checkpoint, error) { return identity.Checkpoint{}, nil }
 
 func TestRunRejectsInvalidFrameBeforeSDKDecode(t *testing.T) {
 	tests := []struct {
@@ -166,13 +177,13 @@ func TestRunRejectsInvalidFrameBeforeSDKDecode(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			talker := &countingTalker{}
-			err := Run(context.Background(), talker, "test", bytes.NewReader(test.frame), io.Discard, 32, 1)
+			channel := &countingChannel{}
+			err := Run(context.Background(), channel, "test", bytes.NewReader(test.frame), io.Discard, 32, 1)
 			if !errors.Is(err, test.want) && (err == nil || !strings.Contains(err.Error(), test.want.Error())) {
 				t.Fatalf("Run error = %v, want %v", err, test.want)
 			}
-			if got := talker.calls.Load(); got != 0 {
-				t.Fatalf("Talk calls = %d, want 0", got)
+			if got := channel.calls.Load(); got != 0 {
+				t.Fatalf("Send calls = %d, want 0", got)
 			}
 		})
 	}

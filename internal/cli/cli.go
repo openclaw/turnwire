@@ -78,6 +78,14 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		err = runServe(ctx, commandArgs, opts, stdin, stdout, stderr)
 	case "doctor":
 		err = runDoctor(ctx, commandArgs, opts, stdout)
+	case "identity":
+		err = runIdentity(commandArgs, opts, stdout)
+	case "peer":
+		err = runPeer(commandArgs, opts, stdout)
+	case "approve":
+		err = runApprove(commandArgs, opts, stdin, stdout)
+	case "checkpoint":
+		err = runCheckpoint(commandArgs, opts, stdout)
 	case "log":
 		err = runLog(commandArgs, opts, stdout)
 	case "version":
@@ -186,6 +194,14 @@ func commandHelp(command string) (string, bool) {
 		return serveHelp, true
 	case "doctor":
 		return doctorHelp, true
+	case "identity":
+		return identityHelp, true
+	case "peer":
+		return peerHelp, true
+	case "approve":
+		return approveHelp, true
+	case "checkpoint":
+		return checkpointHelp, true
 	case "log":
 		return logHelp, true
 	case "version":
@@ -197,16 +213,20 @@ func commandHelp(command string) (string, bool) {
 	}
 }
 
-const rootHelp = `Turnwire is an audited, text-only MCP bridge to a paired language model.
+const rootHelp = `Turnwire is a signed, policy-guarded MCP channel between two environments.
 
 Usage:
   turnwire [global flags] <command> [flags]
 
 Commands:
   init       Write a safe configuration and create the audit directory
-  serve      Serve the talk tool over MCP stdio
-  doctor     Check configuration, audit integrity, and optional model access
-  log        List, show, or verify audited exchanges
+  serve      Serve signed mailbox tools over MCP stdio
+  doctor     Check identities, peers, audit integrity, and guard access
+  identity   Print this endpoint's public identity key
+  peer       Add a trusted peer public key
+  approve    Locally approve one exact review-required message
+  checkpoint Print a signed audit-head checkpoint
+  log        List, show, or verify audit events
   version    Print build information
   help       Show help for a command
 
@@ -223,37 +243,55 @@ const initHelp = `Usage:
   turnwire [global flags] init [flags]
 
 Flags:
-  --force            Replace an existing configuration
-  --provider NAME    Built-in provider preset (openai)
-  --api NAME         Model API: chat_completions or responses
-  --endpoint URL     Model API endpoint
-  --model NAME       Model name (for example, gpt-5.5 or gpt-5.4)
-  --api-key-env NAME Environment variable containing the provider API key
-  --allow-remote     Permit a remote HTTPS endpoint
+  --force                       Replace an existing configuration
+  --identity NAME               Endpoint identity (for example, work or personal)
+  --endpoint URL                OpenAI Responses endpoint
+  --model NAME                  Guard model (default pinned GPT-5.4 snapshot)
+  --api-key-env NAME            API key environment variable
+  --policy TEXT                 Operator channel policy
+  --policy-version VERSION      Audited policy version
+  --prompt-cache-retention MODE in_memory or 24h
+  --allow-remote                Permit a remote HTTPS endpoint
 `
 
 const serveHelp = `Usage:
   turnwire [global flags] serve
 
-Runs one MCP server over stdin/stdout. Protocol output is the only stdout output.
+Runs signed mailbox tools over MCP stdin/stdout. Protocol output is the only stdout output.
 `
 
 const doctorHelp = `Usage:
   turnwire [global flags] doctor [--probe] [--json]
 
 Flags:
-  --probe  Send a fixed connectivity probe to the configured model
+  --probe  Send fixed non-user text through the configured guard
   --json   Emit a machine-readable report
 `
 
 const logHelp = `Usage:
   turnwire [global flags] log list [--conversation ID] [--limit N] [--json]
-  turnwire [global flags] log show ID [--json]
+  turnwire [global flags] log show [--json] ID
   turnwire [global flags] log verify [--json]
 `
 
 const versionHelp = `Usage:
   turnwire version [--json]
+`
+
+const identityHelp = `Usage:
+  turnwire [global flags] identity [--json]
+`
+
+const peerHelp = `Usage:
+  turnwire [global flags] peer add NAME PUBLIC_KEY
+`
+
+const approveHelp = `Usage:
+  turnwire [global flags] approve [--yes] MESSAGE_ID
+`
+
+const checkpointHelp = `Usage:
+  turnwire [global flags] checkpoint
 `
 
 func versionLine() string {

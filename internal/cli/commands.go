@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,28 +11,33 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/openclaw/turnwire/internal/approval"
 	"github.com/openclaw/turnwire/internal/audit"
 	"github.com/openclaw/turnwire/internal/buildinfo"
 	"github.com/openclaw/turnwire/internal/config"
+	"github.com/openclaw/turnwire/internal/guard"
+	"github.com/openclaw/turnwire/internal/identity"
 	"github.com/openclaw/turnwire/internal/mailbox"
 	"github.com/openclaw/turnwire/internal/mcpserver"
-	"github.com/openclaw/turnwire/internal/responder"
 )
 
-const probeText = "Turnwire connectivity probe. Reply with OK."
+const probeText = "Routine scheduling note: meeting moved to 10:30 tomorrow."
 
 func runInit(args []string, opts options, stdout io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	var force, allowRemote bool
-	var provider, api, endpoint, model, apiKeyEnv string
+	var identityName, endpoint, model, apiKeyEnv, policy, policyVersion, cacheRetention string
 	flags.BoolVar(&force, "force", false, "replace an existing configuration")
-	flags.StringVar(&provider, "provider", "", "built-in provider preset")
-	flags.StringVar(&api, "api", "", "model API")
-	flags.StringVar(&endpoint, "endpoint", "", "model API endpoint")
-	flags.StringVar(&model, "model", "", "model name")
+	flags.StringVar(&identityName, "identity", "local", "endpoint identity name")
+	flags.StringVar(&endpoint, "endpoint", "", "OpenAI Responses endpoint")
+	flags.StringVar(&model, "model", "", "guard model")
 	flags.StringVar(&apiKeyEnv, "api-key-env", "", "API key environment variable")
+	flags.StringVar(&policy, "policy", "", "channel policy")
+	flags.StringVar(&policyVersion, "policy-version", "", "policy version")
+	flags.StringVar(&cacheRetention, "prompt-cache-retention", "", "in_memory or 24h")
 	flags.BoolVar(&allowRemote, "allow-remote", false, "permit a remote HTTPS endpoint")
 	rest, help, err := parseFlags(flags, args, stdout, initHelp)
 	if err != nil || help {
@@ -42,33 +48,30 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 	}
 
 	cfg := config.Default()
-	if provider != "" && provider != "openai" {
-		return usageError("unsupported provider preset %q", provider)
-	}
-	if provider == "openai" {
-		if api != "" || endpoint != "" {
-			return usageError("--provider openai cannot be combined with --api or --endpoint")
-		}
-		cfg.Provider.API = config.APIResponses
-		cfg.Provider.Endpoint = "https://api.openai.com/v1/responses"
-		cfg.Provider.Model = "gpt-5.5"
-		cfg.Provider.APIKeyEnv = "OPENAI_API_KEY"
-		cfg.Provider.AllowRemote = true
-	}
-	if api != "" {
-		cfg.Provider.API = api
-	}
+	cfg.Identity.Name = identityName
 	if endpoint != "" {
-		cfg.Provider.Endpoint = endpoint
+		cfg.Guard.Endpoint = endpoint
 	}
 	if model != "" {
-		cfg.Provider.Model = model
+		cfg.Guard.Model = model
+		if strings.HasPrefix(model, "gpt-5.5") && cacheRetention == "" {
+			cfg.Guard.PromptCacheRetention = "24h"
+		}
 	}
 	if apiKeyEnv != "" {
-		cfg.Provider.APIKeyEnv = apiKeyEnv
+		cfg.Guard.APIKeyEnv = apiKeyEnv
+	}
+	if policy != "" {
+		cfg.Guard.Policy = policy
+	}
+	if policyVersion != "" {
+		cfg.Guard.PolicyVersion = policyVersion
+	}
+	if cacheRetention != "" {
+		cfg.Guard.PromptCacheRetention = cacheRetention
 	}
 	if allowRemote {
-		cfg.Provider.AllowRemote = true
+		cfg.Guard.AllowRemote = true
 	}
 
 	configPath := opts.configPath
@@ -89,43 +92,59 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("initialize audit log: %w", err)
 	}
-	// Preserve a clear error for ordinary aliases such as a final symlink. The
-	// descriptor guard below remains authoritative and closes the check/reopen
-	// gap for the actual destination selected by the config writer.
+	defer log.Close()
+	signer, err := identity.LoadOrCreate(cfg.AuditDir, cfg.Identity.Name, true)
+	if err != nil {
+		return fmt.Errorf("initialize identity: %w", err)
+	}
+	approvalStore, err := approval.Open(cfg.AuditDir, true)
+	if err != nil {
+		return fmt.Errorf("initialize approvals: %w", err)
+	}
+	defer approvalStore.Close()
 	aliasesAudit, err := log.AliasesPath(configPath)
 	if err != nil {
-		return errors.Join(fmt.Errorf("validate config path: %w", err), log.Close())
+		return fmt.Errorf("validate config path: %w", err)
 	}
 	if aliasesAudit {
-		return errors.Join(errors.New("config path must not name the audit log"), log.Close())
+		return errors.New("config path must not name the audit log")
 	}
-	guard := func(parent *os.File, name string) error {
-		aliasesAudit, err := log.AliasesEntry(parent, name)
-		if err != nil {
-			return fmt.Errorf("validate config path: %w", err)
+	guardDestination := func(parent *os.File, name string) error {
+		aliasesState, guardErr := log.AliasesDirectory(parent)
+		if guardErr != nil {
+			return guardErr
 		}
-		if aliasesAudit {
+		aliasesApprovals, guardErr := approvalStore.AliasesDirectory(parent)
+		if guardErr != nil {
+			return guardErr
+		}
+		if aliasesState || aliasesApprovals {
+			return errors.New("config path must be outside Turnwire state directories")
+		}
+		aliases, guardErr := log.AliasesEntry(parent, name)
+		if guardErr != nil {
+			return guardErr
+		}
+		if aliases {
 			return errors.New("config path must not name the audit log")
 		}
 		return nil
 	}
-	if err := config.WriteGuarded(configPath, cfg, force, guard); err != nil {
-		return errors.Join(err, log.Close())
+	if err := config.WriteGuarded(configPath, cfg, force, guardDestination); err != nil {
+		return err
 	}
-	if err := log.Close(); err != nil {
-		return fmt.Errorf("close audit log: %w", err)
-	}
-
 	if !opts.quiet {
 		lines := []string{
 			"Initialized Turnwire\n",
+			fmt.Sprintf("Identity: %s\n", strconv.Quote(cfg.Identity.Name)),
+			fmt.Sprintf("Public key: %s\n", signer.PublicKey()),
 			fmt.Sprintf("Config: %s\n", strconv.Quote(configPath)),
 			fmt.Sprintf("Audit:  %s\n", strconv.Quote(cfg.AuditDir)),
-			"Next:   turnwire doctor\n",
+			"Next: exchange public keys, run `turnwire peer add`, then `turnwire doctor --probe`\n",
 		}
 		for _, line := range lines {
 			if err := writeOutput(stdout, []byte(line)); err != nil {
-				return fmt.Errorf("write init status: %w", err)
+				return err
 			}
 		}
 	}
@@ -133,19 +152,10 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 }
 
 func runServe(ctx context.Context, args []string, opts options, stdin io.Reader, stdout, stderr io.Writer) error {
-	return runServeWithResponder(ctx, args, opts, stdin, stdout, stderr, func(cfg responder.HTTPConfig) (responder.Responder, error) {
-		return responder.NewHTTP(cfg)
-	})
+	return runServeWithGuard(ctx, args, opts, stdin, stdout, stderr, func(cfg guard.HTTPConfig) (guard.Evaluator, error) { return guard.NewHTTP(cfg) })
 }
 
-func runServeWithResponder(
-	ctx context.Context,
-	args []string,
-	opts options,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-	newResponder func(responder.HTTPConfig) (responder.Responder, error),
-) error {
+func runServeWithGuard(ctx context.Context, args []string, opts options, stdin io.Reader, stdout, stderr io.Writer, newGuard func(guard.HTTPConfig) (guard.Evaluator, error)) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	rest, help, err := parseFlags(flags, args, stdout, serveHelp)
 	if err != nil || help {
@@ -157,7 +167,6 @@ func runServeWithResponder(
 	if terminalReader(stdin) {
 		return usageError("serve expects an MCP client over stdin; run turnwire doctor for an interactive check")
 	}
-
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return err
@@ -171,73 +180,41 @@ func runServeWithResponder(
 		return fmt.Errorf("start service: %w", err)
 	}
 	defer log.Close()
-
-	model, err := newResponder(responder.HTTPConfig{
-		API:            cfg.Provider.API,
-		Endpoint:       cfg.Provider.Endpoint,
-		Model:          cfg.Provider.Model,
-		APIKeyEnv:      cfg.Provider.APIKeyEnv,
-		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
-	})
+	signer, err := identity.LoadOrCreate(auditDir, cfg.Identity.Name, false)
+	if err != nil {
+		return fmt.Errorf("load identity: %w", err)
+	}
+	approvalStore, err := approval.Open(auditDir, true)
+	if err != nil {
+		return fmt.Errorf("open approvals: %w", err)
+	}
+	defer approvalStore.Close()
+	modelGuard, err := newGuard(guard.HTTPConfig{Endpoint: cfg.Guard.Endpoint, Model: cfg.Guard.Model, APIKeyEnv: cfg.Guard.APIKeyEnv, PromptCacheRetention: cfg.Guard.PromptCacheRetention})
 	if err != nil {
 		return err
 	}
-	timeout, err := time.ParseDuration(cfg.Limits.Timeout)
-	if err != nil {
-		return errors.New("configured timeout is invalid")
+	timeout, _ := time.ParseDuration(cfg.Limits.Timeout)
+	maxAge, _ := time.ParseDuration(cfg.Limits.MaxMessageAge)
+	peers := make(map[string]string, len(cfg.Identity.Peers))
+	for _, peer := range cfg.Identity.Peers {
+		peers[peer.Name] = peer.PublicKey
 	}
-	service, err := mailbox.New(mailbox.Options{
-		Audit:          log,
-		Responder:      model,
-		MaxInputBytes:  cfg.Limits.MaxInputBytes,
-		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
-		Timeout:        timeout,
-		MaxConcurrent:  cfg.Limits.MaxConcurrent,
-	})
+	service, err := mailbox.New(mailbox.Options{Audit: log, Signer: signer, Peers: peers, Guard: modelGuard, Approvals: approvalStore, Policy: cfg.Guard.Policy, PolicyVersion: cfg.Guard.PolicyVersion, MaxMessageBytes: cfg.Limits.MaxMessageBytes, Timeout: timeout, MaxMessageAge: maxAge, MaxConcurrent: cfg.Limits.MaxConcurrent})
 	if err != nil {
 		return err
 	}
 	if opts.verbose {
-		fmt.Fprintln(stderr, "turnwire: serving MCP over stdio")
+		fmt.Fprintln(stderr, "turnwire: serving signed mailbox MCP over stdio")
 	}
-	serveErr := mcpserver.Run(ctx, service, buildinfo.Current().Version, stdin, stdout, cfg.Limits.MaxInputBytes, cfg.Limits.MaxConcurrent)
-	// MCP Run normally performs the coordinated drain. Repeat it idempotently to
-	// cover validation or connection exits before its lifecycle watcher starts.
-	if err := service.Shutdown(context.Background()); err != nil {
-		return errors.New("turnwire shutdown failed")
-	}
+	serveErr := mcpserver.Run(ctx, service, buildinfo.Current().Version, stdin, stdout, cfg.Limits.MaxMessageBytes, cfg.Limits.MaxConcurrent)
+	_ = service.Shutdown(context.Background())
 	if serveErr != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		// Transport and SDK errors can include peer-controlled JSON, terminal
-		// control bytes, provider details, or local paths. Keep the CLI boundary
-		// fixed just as tool errors are fixed at the MCP boundary.
 		return errors.New("MCP transport failed")
 	}
 	return nil
-}
-
-func requireAuditCapacity(log *audit.Log) error {
-	usedBytes, maxBytes, err := log.Usage()
-	if err != nil {
-		return err
-	}
-	if usedBytes >= maxBytes {
-		return audit.ErrQuotaExceeded
-	}
-	return nil
-}
-
-func openWritableAudit(dir string, maxBytes int64) (*audit.Log, error) {
-	log, err := audit.OpenWithQuota(dir, maxBytes)
-	if err != nil {
-		return nil, err
-	}
-	if err := requireAuditCapacity(log); err != nil {
-		return nil, errors.Join(err, log.Close())
-	}
-	return log, nil
 }
 
 type doctorCheck struct {
@@ -245,38 +222,15 @@ type doctorCheck struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 }
-
 type doctorReport struct {
 	OK     bool          `json:"ok"`
 	Checks []doctorCheck `json:"checks"`
 }
 
 func runDoctor(ctx context.Context, args []string, opts options, stdout io.Writer) error {
-	return runDoctorWithDependencies(ctx, args, opts, stdout, doctorDependencies{
-		loadConfig:  config.Load,
-		verifyAudit: verifyWritableAuditDir,
-		lookupEnv:   os.LookupEnv,
-		probe:       probeProvider,
-	})
-}
-
-type doctorDependencies struct {
-	loadConfig  func(string) (config.Config, error)
-	verifyAudit func(string, int64) error
-	lookupEnv   func(string) (string, bool)
-	probe       func(context.Context, config.Config) error
-}
-
-func runDoctorWithDependencies(
-	ctx context.Context,
-	args []string,
-	opts options,
-	stdout io.Writer,
-	deps doctorDependencies,
-) error {
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	var probe, asJSON bool
-	flags.BoolVar(&probe, "probe", false, "probe the configured model")
+	flags.BoolVar(&probe, "probe", false, "probe the configured guard")
 	flags.BoolVar(&asJSON, "json", false, "emit JSON")
 	rest, help, err := parseFlags(flags, args, stdout, doctorHelp)
 	if err != nil || help {
@@ -285,102 +239,275 @@ func runDoctorWithDependencies(
 	if err := requireNoArgs(rest); err != nil {
 		return err
 	}
-
-	report := doctorReport{OK: true, Checks: make([]doctorCheck, 0, 4)}
-	add := func(name string, err error, success string) {
+	report := doctorReport{OK: true}
+	add := func(name string, err error, ok string) {
 		if err != nil {
 			report.OK = false
-			report.Checks = append(report.Checks, doctorCheck{Name: name, Status: "fail", Message: safeDoctorError(name, err)})
-			return
-		}
-		report.Checks = append(report.Checks, doctorCheck{Name: name, Status: "pass", Message: success})
-	}
-
-	cfg, loadErr := deps.loadConfig(opts.configPath)
-	add("config", loadErr, "configuration is valid")
-	if loadErr == nil {
-		auditDir, pathErr := resolveAuditDir(cfg, opts.dataDir)
-		var auditErr error
-		if pathErr != nil {
-			auditErr = pathErr
+			report.Checks = append(report.Checks, doctorCheck{Name: name, Status: "fail", Message: err.Error()})
 		} else {
-			auditErr = deps.verifyAudit(auditDir, cfg.Limits.MaxAuditBytes)
-		}
-		add("audit", auditErr, "audit chain and permissions are valid")
-
-		// Audit/platform validation is the authorization boundary for all
-		// provider-side activity, including merely reading an API key. Do not
-		// inspect credentials or construct/contact the provider after a storage
-		// prerequisite fails.
-		if auditErr == nil {
-			var credentialErr error
-			if cfg.Provider.APIKeyEnv == "" {
-				add("credentials", nil, "provider does not require an API key")
-			} else if value, ok := deps.lookupEnv(cfg.Provider.APIKeyEnv); !ok || value == "" {
-				credentialErr = errors.New("configured API key environment variable is empty")
-				add("credentials", credentialErr, "")
-			} else {
-				add("credentials", nil, "configured API key is available")
-			}
-
-			if probe && credentialErr == nil {
-				probeErr := deps.probe(ctx, cfg)
-				add("provider", probeErr, "fixed model probe succeeded")
-			}
+			report.Checks = append(report.Checks, doctorCheck{Name: name, Status: "ok", Message: ok})
 		}
 	}
-
+	cfg, loadErr := config.Load(opts.configPath)
+	add("config", loadErr, "valid v2 configuration")
+	if loadErr == nil {
+		auditDir, resolveErr := resolveAuditDir(cfg, opts.dataDir)
+		add("audit_path", resolveErr, "resolved")
+		if resolveErr == nil {
+			add("audit", verifyWritableAuditDir(auditDir, cfg.Limits.MaxAuditBytes), "hash chain and storage valid")
+			_, identityErr := identity.LoadOrCreate(auditDir, cfg.Identity.Name, false)
+			add("identity", identityErr, "signing key valid")
+		}
+		if len(cfg.Identity.Peers) == 0 {
+			add("peers", errors.New("no peer public keys configured"), "")
+		} else {
+			add("peers", nil, fmt.Sprintf("%d configured", len(cfg.Identity.Peers)))
+		}
+		if cfg.Guard.APIKeyEnv != "" {
+			value, exists := os.LookupEnv(cfg.Guard.APIKeyEnv)
+			if !exists || value == "" {
+				add("api_key", guard.ErrMissingAPIKey, "")
+			} else {
+				add("api_key", nil, "configured")
+			}
+		}
+		if probe && report.OK {
+			modelGuard, guardErr := guard.NewHTTP(guard.HTTPConfig{Endpoint: cfg.Guard.Endpoint, Model: cfg.Guard.Model, APIKeyEnv: cfg.Guard.APIKeyEnv, PromptCacheRetention: cfg.Guard.PromptCacheRetention})
+			if guardErr == nil {
+				probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				_, guardErr = modelGuard.Evaluate(probeCtx, guard.Input{Direction: "outbound", Source: cfg.Identity.Name, Destination: cfg.Identity.Peers[0].Name, Text: probeText, Policy: cfg.Guard.Policy})
+				cancel()
+			}
+			add("guard_probe", guardErr, "structured verdict received")
+		}
+	}
 	if asJSON {
 		if err := writeJSONOutput(stdout, report); err != nil {
-			return fmt.Errorf("write doctor report: %w", err)
+			return err
 		}
 	} else {
 		for _, check := range report.Checks {
-			line := fmt.Sprintf("%s %-11s %s\n", stringsUpper(check.Status), check.Name, strconv.QuoteToGraphic(check.Message))
-			if err := writeOutput(stdout, []byte(line)); err != nil {
-				return fmt.Errorf("write doctor report: %w", err)
-			}
-		}
-		if report.OK {
-			if err := writeOutput(stdout, []byte("Turnwire is ready.\n")); err != nil {
-				return fmt.Errorf("write doctor report: %w", err)
-			}
+			fmt.Fprintf(stdout, "%-14s %-4s %s\n", check.Name, strings.ToUpper(check.Status), check.Message)
 		}
 	}
 	if !report.OK {
-		return reportedError(errors.New("one or more doctor checks failed"))
+		return reportedError(errors.New("doctor found configuration problems"))
 	}
 	return nil
 }
 
-func safeDoctorError(name string, err error) string {
-	if name == "provider" {
-		// Network client errors may include URLs. Keep query strings and other
-		// accidentally embedded credentials out of diagnostics.
-		return "fixed model probe failed"
+func runIdentity(args []string, opts options, stdout io.Writer) error {
+	flags := flag.NewFlagSet("identity", flag.ContinueOnError)
+	var asJSON bool
+	flags.BoolVar(&asJSON, "json", false, "emit JSON")
+	rest, help, err := parseFlags(flags, args, stdout, identityHelp)
+	if err != nil || help {
+		return err
 	}
-	return err.Error()
-}
-
-func probeProvider(ctx context.Context, cfg config.Config) error {
-	model, err := responder.NewHTTP(responder.HTTPConfig{
-		API:            cfg.Provider.API,
-		Endpoint:       cfg.Provider.Endpoint,
-		Model:          cfg.Provider.Model,
-		APIKeyEnv:      cfg.Provider.APIKeyEnv,
-		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
-	})
+	if err := requireNoArgs(rest); err != nil {
+		return err
+	}
+	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return err
 	}
-	timeout, err := time.ParseDuration(cfg.Limits.Timeout)
+	auditDir, err := resolveAuditDir(cfg, opts.dataDir)
 	if err != nil {
-		return errors.New("configured timeout is invalid")
+		return err
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	_, err = model.Respond(probeCtx, probeText)
+	signer, err := identity.LoadOrCreate(auditDir, cfg.Identity.Name, false)
+	if err != nil {
+		return err
+	}
+	value := map[string]string{"identity": cfg.Identity.Name, "public_key": signer.PublicKey()}
+	if asJSON {
+		return writeJSONOutput(stdout, value)
+	}
+	_, err = fmt.Fprintf(stdout, "Identity: %s\nPublic key: %s\n", cfg.Identity.Name, signer.PublicKey())
 	return err
+}
+
+func runPeer(args []string, opts options, stdout io.Writer) error {
+	if len(args) != 3 || args[0] != "add" {
+		return usageError("usage: turnwire peer add NAME PUBLIC_KEY")
+	}
+	cfg, err := config.Load(opts.configPath)
+	if err != nil {
+		return err
+	}
+	for _, peer := range cfg.Identity.Peers {
+		if peer.Name == args[1] {
+			return usageError("peer %q already exists", args[1])
+		}
+	}
+	cfg.Identity.Peers = append(cfg.Identity.Peers, config.PeerConfig{Name: args[1], PublicKey: args[2]})
+	if err := cfg.Validate(); err != nil {
+		return usageError("%v", err)
+	}
+	path := opts.configPath
+	if path == "" {
+		path = config.DefaultConfigPath()
+	}
+	if err := config.Write(path, cfg, true); err != nil {
+		return err
+	}
+	if !opts.quiet {
+		_, err = fmt.Fprintf(stdout, "Added peer %s\n", strconv.Quote(args[1]))
+	}
+	return err
+}
+
+func runApprove(args []string, opts options, stdin io.Reader, stdout io.Writer) error {
+	flags := flag.NewFlagSet("approve", flag.ContinueOnError)
+	var yes bool
+	flags.BoolVar(&yes, "yes", false, "approve without interactive confirmation")
+	rest, help, err := parseFlags(flags, args, stdout, approveHelp)
+	if err != nil || help {
+		return err
+	}
+	if len(rest) != 1 || !validCLIIdentifier(rest[0]) {
+		return usageError("usage: turnwire approve [--yes] MESSAGE_ID")
+	}
+	cfg, err := config.Load(opts.configPath)
+	if err != nil {
+		return err
+	}
+	auditDir, err := resolveAuditDir(cfg, opts.dataDir)
+	if err != nil {
+		return err
+	}
+	store, err := approval.Open(auditDir, false)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	pending, err := store.Pending(rest[0])
+	if err != nil {
+		return err
+	}
+	display := fmt.Sprintf("Message: %s\nDirection: %s (%s -> %s)\nSHA-256: %s\nBody: %s\n", pending.MessageID, pending.Direction, pending.Source, pending.Destination, pending.BodySHA256, strconv.QuoteToASCII(pending.Body))
+	if err := writeOutput(stdout, []byte(display)); err != nil {
+		return fmt.Errorf("display pending approval: %w", err)
+	}
+	if !yes {
+		if err := writeOutput(stdout, []byte("\nApprove this exact message? [y/N] ")); err != nil {
+			return fmt.Errorf("display approval prompt: %w", err)
+		}
+		line, readErr := bufio.NewReader(io.LimitReader(stdin, 16)).ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+		if strings.TrimSpace(strings.ToLower(line)) != "y" && strings.TrimSpace(strings.ToLower(line)) != "yes" {
+			return errors.New("approval canceled")
+		}
+	}
+	if err := store.Approve(pending.Binding(), time.Now()); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, "Approved; retry the same Turnwire tool call.")
+	return err
+}
+
+func runCheckpoint(args []string, opts options, stdout io.Writer) error {
+	if len(args) != 0 {
+		return usageError("checkpoint accepts no arguments")
+	}
+	cfg, err := config.Load(opts.configPath)
+	if err != nil {
+		return err
+	}
+	auditDir, err := resolveAuditDir(cfg, opts.dataDir)
+	if err != nil {
+		return err
+	}
+	log, err := audit.OpenWithQuota(auditDir, cfg.Limits.MaxAuditBytes)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	signer, err := identity.LoadOrCreate(auditDir, cfg.Identity.Name, false)
+	if err != nil {
+		return err
+	}
+	seq, head, err := log.Head()
+	if err != nil {
+		return err
+	}
+	checkpoint, err := signer.Checkpoint(seq, head, time.Now())
+	if err != nil {
+		return err
+	}
+	return writeJSONOutput(stdout, checkpoint)
+}
+
+func requireAuditCapacity(log *audit.Log) error {
+	used, max, err := log.Usage()
+	if err != nil {
+		return err
+	}
+	if used >= max {
+		return audit.ErrQuotaExceeded
+	}
+	return nil
+}
+func openWritableAudit(dir string, max int64) (*audit.Log, error) {
+	log, err := audit.OpenWithQuota(dir, max)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireAuditCapacity(log); err != nil {
+		return nil, errors.Join(err, log.Close())
+	}
+	return log, nil
+}
+func writeJSONOutput(w io.Writer, value any) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(value)
+}
+func resolveAuditDir(cfg config.Config, dataDir string) (string, error) {
+	if dataDir != "" {
+		absolute, err := filepath.Abs(dataDir)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(filepath.Clean(absolute), "audit"), nil
+	}
+	if cfg.AuditDir != "" {
+		return cfg.AuditDir, nil
+	}
+	base := config.DefaultDataDir()
+	if base == "" {
+		return "", errors.New("cannot determine default data directory")
+	}
+	return filepath.Join(base, "audit"), nil
+}
+func terminalReader(reader io.Reader) bool {
+	file, ok := reader.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+func verifyWritableAuditDir(dir string, max int64) error {
+	log, err := openWritableAudit(dir, max)
+	if err != nil {
+		return err
+	}
+	return log.Close()
+}
+func validCLIIdentifier(value string) bool {
+	if len(value) < 1 || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._:-", r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func runVersion(args []string, stdout io.Writer) error {
@@ -395,90 +522,7 @@ func runVersion(args []string, stdout io.Writer) error {
 		return err
 	}
 	if asJSON {
-		if err := writeJSONOutput(stdout, buildinfo.Current()); err != nil {
-			return fmt.Errorf("write version: %w", err)
-		}
-		return nil
+		return writeJSONOutput(stdout, buildinfo.Current())
 	}
-	if err := writeOutput(stdout, []byte(versionLine())); err != nil {
-		return fmt.Errorf("write version: %w", err)
-	}
-	return nil
-}
-
-func writeJSONOutput(w io.Writer, value any) error {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	encoded = append(encoded, '\n')
-	return writeOutput(w, encoded)
-}
-
-func resolveAuditDir(cfg config.Config, dataDir string) (string, error) {
-	// An explicit command-line data root overrides configuration. Without that
-	// override, retain the absolute audit path written by init before falling
-	// back to the platform default data root.
-	if dataDir == "" && cfg.AuditDir != "" {
-		return cfg.AuditDir, nil
-	}
-	if dataDir == "" {
-		dataDir = config.DefaultDataDir()
-		if dataDir == "" {
-			return "", errors.New("cannot determine the default data directory; use --data-dir")
-		}
-	}
-	absoluteDataDir, err := filepath.Abs(dataDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve data directory: %w", err)
-	}
-	return filepath.Join(absoluteDataDir, "audit"), nil
-}
-
-func terminalReader(reader io.Reader) bool {
-	file, ok := reader.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
-
-func verifyAuditDir(dir string) error {
-	return audit.Verify(dir)
-}
-
-func verifyWritableAuditDir(dir string, maxBytes int64) error {
-	if maxBytes <= 0 {
-		return errors.New("audit log quota must be positive")
-	}
-	var usedBytes int64
-	if err := audit.Scan(dir, func(entry audit.Entry) error {
-		encoded, err := json.Marshal(entry)
-		if err != nil {
-			return fmt.Errorf("encode verified audit entry: %w", err)
-		}
-		// Scan accepts only canonical JSON entries and requires the final newline,
-		// so re-encoding each entry plus its newline reproduces the exact file size.
-		usedBytes += int64(len(encoded) + 1)
-		return nil
-	}); err != nil {
-		return err
-	}
-	if usedBytes >= maxBytes {
-		return fmt.Errorf(
-			"%w: current %d bytes, limit %d bytes",
-			audit.ErrQuotaExceeded,
-			usedBytes,
-			maxBytes,
-		)
-	}
-	return nil
-}
-
-func stringsUpper(value string) string {
-	if value == "pass" {
-		return "PASS"
-	}
-	return "FAIL"
+	return writeOutput(stdout, []byte(versionLine()))
 }
