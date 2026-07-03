@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	configVersion                = 2
 	defaultEndpoint              = "https://api.openai.com/v1/responses"
 	defaultModel                 = "gpt-5.4-2026-03-05"
 	defaultMaxMessageBytes       = 16 * 1024
@@ -37,7 +36,6 @@ const (
 
 // Config is the complete Turnwire configuration.
 type Config struct {
-	Version  int            `json:"version"`
 	Identity IdentityConfig `json:"identity"`
 	Guard    GuardConfig    `json:"guard"`
 	Limits   LimitsConfig   `json:"limits"`
@@ -326,9 +324,6 @@ func DefaultDataDir() string {
 
 // Validate rejects unsafe endpoints and invalid resource limits.
 func (c Config) Validate() error {
-	if c.Version != configVersion {
-		return errors.New("config.version must be 2")
-	}
 	if !validName(c.Identity.Name) {
 		return errors.New("config.identity.name must use 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen")
 	}
@@ -485,7 +480,6 @@ func validName(value string) bool {
 
 func defaultConfig() Config {
 	return Config{
-		Version:  configVersion,
 		Identity: IdentityConfig{Name: "local", Peers: []PeerConfig{}},
 		Guard: GuardConfig{
 			API:                  "responses",

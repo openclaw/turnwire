@@ -171,7 +171,7 @@ func (s *requestLimitedStream) admitFrame(frame []byte) ([]byte, []*jsonrpc.Resp
 		for _, message := range messages {
 			request, isRequest := message.(*jsonrpc.Request)
 			if isRequest && !request.IsCall() {
-				// The legacy MCP batch implementation waits for one response per
+				// The MCP batch implementation waits for one response per
 				// element, but notifications intentionally produce no response.
 				// Reject the complete frame before reserving call or non-call state.
 				return nil, nil, errBatchContainsNotification

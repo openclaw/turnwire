@@ -37,8 +37,8 @@ func TestResolveReleaseOverridesTakePrecedence(t *testing.T) {
 		},
 	}
 
-	got := resolve("v2.0.0", "release-revision", "release-time", build, true)
-	if got.Version != "v2.0.0" || got.Commit != "release-revision" || got.BuildTime != "release-time" ||
+	got := resolve("v9.0.0", "release-revision", "release-time", build, true)
+	if got.Version != "v9.0.0" || got.Commit != "release-revision" || got.BuildTime != "release-time" ||
 		got.Modified == nil || *got.Modified {
 		t.Fatalf("resolve() = %#v", got)
 	}
