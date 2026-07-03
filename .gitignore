@@ -1,0 +1,6 @@
+/turnwire
+/turnwire.exe
+/bin/
+*.log
+*.jsonl
+.DS_Store
