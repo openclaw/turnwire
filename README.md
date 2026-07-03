@@ -3,86 +3,158 @@
 [![CI](https://github.com/openclaw/turnwire/actions/workflows/ci.yml/badge.svg)](https://github.com/openclaw/turnwire/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Turnwire is an audited, text-only MCP relay. A caller sends text through one
-`talk` tool, a configured language model produces text, and Turnwire records
-both messages before returning the reply.
+Turnwire is a signed, policy-guarded, text-only channel between two private
+environments. Each environment runs its own local endpoint. An agent carries a
+released envelope through OpenAI to the other endpoint; Turnwire never opens an
+inbound port and never gives OpenAI general host access.
 
-Turnwire exposes exactly one capability:
-
-```text
-talk(text, request_id?, conversation_id?) -> reply + audit receipt
-```
-
-It does not expose files, shell commands, browser control, URLs, MCP resources,
-MCP prompts, or model tools. Conversation IDs correlate messages but do not add
-model-side memory in version 1.
-
-## Architecture
+Five MCP tools:
 
 ```text
-MCP client or agent
-    │ MCP request and response
-    ▼
-operator-selected transport
-    │ authenticated externally when crossing hosts
-    ▼
-turnwire serve ──► Chat Completions or Responses text model
-    │
-    └── append-only audit.jsonl
+send_message       guard text, sign a peer-addressed envelope
+receive_message    verify peer signature, guard again, commit to inbox
+confirm_delivery   verify and record the receiver acknowledgement
+list_messages      read accepted messages; every read is audited
+audit_checkpoint   sign the current local audit-chain head
 ```
 
-Turnwire serves MCP over stdin and stdout. It does not open a network listener,
-authenticate callers, or establish a tunnel. When the client and Turnwire run
-on different hosts, place it behind an authenticated transport appropriate for
-your environment.
+No files, shell, browser, URL fetch, MCP resources/prompts, or model tools.
 
-## Quick start
+## Practical flow
 
-Requirements:
+```text
+work agent / OpenAI                                      personal agent / OpenAI
+        |                                                           |
+        | Secure MCP Tunnel                         Secure MCP Tunnel|
+        v                                                           v
+ work Turnwire -- local DLP -- GPT guard      GPT guard -- local DLP -- personal Turnwire
+        |                 |                         |                 |
+        |          signed envelope -- agent ------->                 |
+        |                 <---- signed acknowledgement               |
+        v                                                           v
+ work audit.jsonl                                       personal audit.jsonl
+```
 
-- macOS or Linux. Windows builds, but runtime audit storage intentionally fails
-  closed until owner-only DACL enforcement is implemented.
-- macOS builds must have cgo enabled so native ACLs can be inspected; a
-  cgo-disabled binary compiles but fails closed at runtime.
-- Go 1.25 or newer.
-- A non-streaming Chat Completions- or Responses-compatible endpoint. The
-  default is [Ollama](https://ollama.com/) serving the public
-  [`gpt-oss:20b`](https://ollama.com/library/gpt-oss) model on loopback.
+1. `send_message` records the proposal locally, runs deterministic secret/DLP
+   checks, then calls the configured GPT guard with strict Structured Outputs.
+2. A denial produces no envelope. A review creates a local pending record;
+   only `turnwire approve MESSAGE_ID` can approve that exact body hash. MCP
+   cannot approve it.
+3. Allowed or locally approved text is signed with the source Ed25519 key. The
+   agent carries the JSON envelope to the peer's `receive_message` tool.
+4. The peer verifies destination, signature, body hash, age, and replay binding,
+   then independently repeats deterministic and GPT guards before committing.
+5. The peer commits the inbox entry, signs that exact audit head in an
+   acknowledgement, then logs receipt issuance. The source verifies and
+   records it with `confirm_delivery`.
+
+OpenAI does not “crawl” either machine. The tunnel client makes an outbound
+HTTPS connection, and OpenAI can call only the exposed MCP tools. Secure MCP
+Tunnel is transport, not generic host-to-host networking.
+
+## Security model
+
+- Default guard: pinned `gpt-5.4-2026-03-05` through Responses.
+- GPT-5.5 supported with `--model gpt-5.5-2026-04-23` or `gpt-5.5`.
+- Every releasable message gets an outbound model verdict. Every received
+  envelope gets a separate inbound verdict. Errors and malformed output fail
+  closed.
+- Obvious credentials and secrets are denied locally before reaching the guard
+  API. GPT is a secondary classifier, not the cryptographic or deterministic
+  boundary.
+- Guard calls set `store: false`, `background: false`, provide no tools, and
+  demand strict JSON Schema output. GPT-5.4 defaults to `in_memory` prompt
+  caching. Current OpenAI docs say GPT-5.5 requires 24-hour extended caching,
+  so init selects `24h` for GPT-5.5.
+- Endpoints trust only configured peer public keys. Envelopes and delivery
+  acknowledgements are Ed25519 signed.
+- Exact text, decisions, policy/model, OpenAI response and `x-request-id`, peer
+  identities, hashes, and receipts enter a synced hash-chained local log.
+- Signed audit checkpoints can be independently stored to detect later
+  whole-log replacement or truncation.
+
+For strongest OpenAI-side controls, use a dedicated API project approved for
+Zero Data Retention. `store: false` alone does not remove default abuse-
+monitoring retention. See [Data controls](https://developers.openai.com/api/docs/guides/your-data#v1responses).
+
+Secure MCP Tunnel does not emit individual transport requests as Compliance
+Platform app events. Tunnel create/update/delete events appear in Platform
+Audit logs; normal custom-app invocation/auth logging applies separately. See
+the official [logging boundaries](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels#logging-boundaries).
+Turnwire's local ledgers remain the authoritative per-message record.
+
+## Set up two endpoints
+
+Requirements: macOS or Linux, Go 1.25+, and `OPENAI_API_KEY`. Windows runtime
+fails closed until owner-only DACL enforcement exists.
+
+Work machine:
 
 ```bash
-mkdir -p ./bin
 go build -o ./bin/turnwire ./cmd/turnwire
-ollama pull gpt-oss:20b
-./bin/turnwire init
-./bin/turnwire doctor --probe
+./bin/turnwire init --identity work
+./bin/turnwire identity
 ```
 
-To use an OpenAI GPT model instead, set `OPENAI_API_KEY` and initialize the
-OpenAI preset. It uses the Responses API, disables provider-side response
-storage, and defaults to `gpt-5.5`. GPT-5.4 is also supported with
-`--model gpt-5.4`.
+Personal machine:
 
 ```bash
-./bin/turnwire init --provider openai
-./bin/turnwire doctor --probe
+go build -o ./bin/turnwire ./cmd/turnwire
+./bin/turnwire init --identity personal
+./bin/turnwire identity
 ```
 
-For GPT-5.4:
+Exchange only the printed public keys, then pin each peer:
 
 ```bash
-./bin/turnwire init --provider openai --model gpt-5.4
+# work machine
+./bin/turnwire peer add personal PERSONAL_PUBLIC_KEY
+
+# personal machine
+./bin/turnwire peer add work WORK_PUBLIC_KEY
+```
+
+Verify both:
+
+```bash
 ./bin/turnwire doctor --probe
 ```
 
-`init` writes a restrictive per-user JSON configuration and creates the audit
-directory. It never writes an API key. Configure your MCP client to start the
-absolute binary path with the `serve` argument. For clients that use the common
-JSON MCP server shape:
+GPT-5.5 example:
+
+```bash
+./bin/turnwire init --identity work --model gpt-5.5-2026-04-23 --force
+```
+
+`--force` preserves the key and audit history but replaces config. Recheck
+policy and peers after a forced init.
+
+## Secure MCP Tunnel
+
+Configure a separate tunnel and custom app per endpoint. The public
+[`tunnel-client`](https://github.com/openai/tunnel-client) can spawn Turnwire:
+
+```bash
+tunnel-client init \
+  --sample sample_mcp_stdio_local \
+  --profile turnwire-work \
+  --tunnel-id TUNNEL_ID \
+  --mcp-command "/absolute/path/to/turnwire/bin/turnwire serve"
+
+tunnel-client doctor --profile turnwire-work --explain
+tunnel-client run --profile turnwire-work
+```
+
+Follow the official [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+for permissions and workspace association. Associate a work endpoint with a
+personal workspace only when the work administrator permits that relationship.
+
+Direct local MCP client:
 
 ```json
 {
   "mcpServers": {
-    "turnwire": {
+    "turnwire-work": {
       "command": "/absolute/path/to/turnwire/bin/turnwire",
       "args": ["serve"]
     }
@@ -90,118 +162,43 @@ JSON MCP server shape:
 }
 ```
 
-The exact outer configuration format depends on the client.
+## Review and audit
 
-The process writes MCP JSON-RPC only to stdout. Diagnostics go to stderr;
-message content goes to the audit log. To keep non-call SDK queueing bounded,
-each stdio session fails closed after 16 inbound notifications or responses;
-reconnect to start a fresh session.
-
-### Optional: OpenAI Secure MCP Tunnel
-
-[OpenAI Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
-is one optional public transport integration. Its public
-[`tunnel-client`](https://github.com/openai/tunnel-client) can start Turnwire as
-a local stdio MCP server:
+On `review_required`, approve locally, then retry the identical call:
 
 ```bash
-tunnel-client init \
-  --sample sample_mcp_stdio_local \
-  --profile turnwire \
-  --tunnel-id TUNNEL_ID \
-  --mcp-command "/absolute/path/to/turnwire/bin/turnwire serve"
-
-tunnel-client doctor --profile turnwire --explain
-tunnel-client run --profile turnwire
+turnwire approve MESSAGE_ID
 ```
 
-Follow the public guide for tunnel creation, permissions, and workspace
-association. The tunnel is not part of Turnwire and other authenticated
-transports may be used instead.
-
-## CLI
+Audit commands:
 
 ```text
-turnwire init [options]       Create config and audit storage
-turnwire serve                Serve MCP over stdin/stdout
-turnwire doctor [--probe]     Validate config, storage, and model access
-turnwire log list             List logged exchanges
-turnwire log show ID          Show one exchange
-turnwire log verify           Verify the complete audit hash chain
-turnwire version              Print build information
+turnwire log list [--type TYPE] [--limit N] [--json]
+turnwire log show ID [--json]
+turnwire log verify [--json]
+turnwire checkpoint
 ```
 
-Human-readable log commands escape terminal controls. `log list` retains only
-exchange metadata, while `log list --json` includes exact logged UTF-8 bodies.
-Both modes enforce a 16 MiB in-memory budget for the selected newest records;
-older history is verified without being retained. Reduce `--limit` or filter
-with `--conversation` if the selected window exceeds the budget. JSON records
-are emitted one at a time after the complete audit chain has been verified.
+Store periodic checkpoints outside the endpoint. Reconcile message IDs, hashes,
+signed acknowledgements, model/request IDs, and available OpenAI custom-app
+invocation logs.
 
-## Configuration
+## Important limits
 
-The default config is local-only:
+- If GPT inspects plaintext, OpenAI received it. Turnwire controls transfer
+  between environments; it cannot make guard input invisible to OpenAI.
+- A classifier cannot prove text non-confidential. Deterministic checks, narrow
+  policy, local review, signatures, and evidence reduce risk—not guarantee zero
+  leakage.
+- Tunnel authorization controls the app path. Stdio does not expose a verified
+  individual human caller identity; logs identify endpoint and peer.
+- A host administrator can replace binary, keys, policy, approvals, or log.
+- The agent carries released envelopes; Turnwire does not directly connect
+  hosts.
+- Text only. Attachments and arbitrary host access remain out of scope.
 
-```json
-{
-  "version": 1,
-  "provider": {
-    "api": "chat_completions",
-    "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
-    "model": "gpt-oss:20b"
-  },
-  "limits": {
-    "max_input_bytes": 16384,
-    "max_output_bytes": 16384,
-    "max_audit_bytes": 268435456,
-    "timeout": "120s",
-    "max_concurrent": 1
-  }
-}
-```
-
-Remote providers require HTTPS and an explicit `allow_remote` opt-in. If a
-provider needs a bearer token, set `api_key_env` to the *name* of an environment
-variable; never put the value in the config file or a command-line flag. See
-[configuration](docs/configuration.md).
-
-## Audit behavior
-
-Each accepted request is written and synced before model execution. Each reply
-is written and synced before success is returned. This ordering depends on the
-operating system, filesystem, and storage device honoring their documented
-`fsync` semantics; it is not a guarantee against faulty or malicious storage.
-
-Entries contain exact UTF-8 content, SHA-256 content digests, a monotonic
-sequence, and a hash link to the previous entry. The service refuses to start
-if verification detects a malformed or modified chain, and an exclusive file
-lock prevents cooperating Turnwire processes from writing the same log.
-
-The audit path is opened through validated directory descriptors. A failed or
-uncertain append or sync poisons that live handle: no reply lookup or log read
-is allowed until close and a successful synced, verified reopen. Standalone log
-commands require the exclusive recovery lock and therefore refuse to read
-while a Turnwire writer is live. Request IDs remain usable across restarts by
-scanning the verified log. Active requests and compact idempotency metadata
-stay in memory; completed reply bodies are read and verified on demand from
-their indexed audit offsets.
-
-The encoded log is capped at 256 MiB by default. Entries are admitted against
-the exact serialized size before any write; quota exhaustion is a clean error
-that does not poison verification or log inspection. Turnwire never deletes or
-rotates audit history automatically. Archive or replace the log under your own
-retention policy while the service is stopped. To resume after exhaustion,
-preserve the old directory and its final audit head, then point `audit_dir` at
-a fresh absolute owner-only directory (or archive the old directory and
-recreate the configured path) before restarting.
-
-`doctor --probe` is the sole operational exception: it sends fixed,
-non-user-supplied health-check text to the provider, discards the model text,
-and records no relay exchange.
-
-The local hash chain can detect many modifications but cannot prevent a host
-administrator from replacing or truncating the entire log. Independently
-checkpoint or sign audit heads if that threat matters to your deployment.
+Read the [threat model](docs/threat-model.md) and
+[configuration reference](docs/configuration.md) before deployment.
 
 ## Development
 
@@ -211,28 +208,6 @@ go vet ./...
 go build ./cmd/turnwire
 ```
 
-Ordinary Go builds populate `turnwire version --json` from the module and VCS
-metadata embedded by the Go toolchain, including whether the working tree was
-modified. When VCS state is unavailable, the JSON omits `modified` instead of
-claiming the source tree was clean. Release builds can supply authoritative
-values with linker flags. Keep Go's VCS stamping enabled so a dirty release
-checkout remains visible; release automation should also require a clean tree.
-Using the source revision time instead of the wall-clock build time keeps the
-provenance fields stable for identical release inputs:
-
-```bash
-VERSION=v1.2.3
-REVISION="$(git rev-parse HEAD)"
-REVISION_TIME="$(git show -s --format=%cI HEAD)"
-go build -trimpath \
-  -ldflags="-X github.com/openclaw/turnwire/internal/buildinfo.Version=${VERSION} -X github.com/openclaw/turnwire/internal/buildinfo.Commit=${REVISION} -X github.com/openclaw/turnwire/internal/buildinfo.BuildTime=${REVISION_TIME}" \
-  -o ./bin/turnwire ./cmd/turnwire
-```
-
-Read the [threat model](docs/threat-model.md) before broadening the protocol.
-File access, tool execution, attachment transfer, and unsolicited network
-capabilities are intentionally out of scope for version 1.
-
 ## License
 
-Turnwire is available under the [MIT License](LICENSE).
+MIT. See [LICENSE](LICENSE).
