@@ -41,10 +41,17 @@ const (
 
 // Config is the complete Turnwire configuration.
 type Config struct {
-	Identity IdentityConfig `json:"identity"`
-	Guard    GuardConfig    `json:"guard"`
-	Limits   LimitsConfig   `json:"limits"`
-	AuditDir string         `json:"audit_dir,omitempty"`
+	Identity   IdentityConfig   `json:"identity"`
+	Deployment DeploymentConfig `json:"deployment"`
+	Guard      GuardConfig      `json:"guard"`
+	Limits     LimitsConfig     `json:"limits"`
+	AuditDir   string           `json:"audit_dir,omitempty"`
+}
+
+// DeploymentConfig identifies the tunnel/app association represented in
+// startup attestations and signed checkpoints.
+type DeploymentConfig struct {
+	ID string `json:"id"`
 }
 
 // IdentityConfig names this endpoint and lists the public keys it trusts.
@@ -222,6 +229,9 @@ func (c Config) Validate() error {
 	if !validName(c.Identity.Name) {
 		return errors.New("config.identity.name must use 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen")
 	}
+	if !validName(c.Deployment.ID) {
+		return errors.New("config.deployment.id must use 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen")
+	}
 	seenPeers := make(map[string]struct{}, len(c.Identity.Peers))
 	for _, peer := range c.Identity.Peers {
 		if !validName(peer.Name) || peer.Name == c.Identity.Name {
@@ -381,7 +391,8 @@ func validName(value string) bool {
 
 func defaultConfig() Config {
 	return Config{
-		Identity: IdentityConfig{Name: "local", Peers: []PeerConfig{}},
+		Identity:   IdentityConfig{Name: "local", Peers: []PeerConfig{}},
+		Deployment: DeploymentConfig{ID: "local"},
 		Guard: GuardConfig{
 			API:                  "responses",
 			Endpoint:             defaultEndpoint,

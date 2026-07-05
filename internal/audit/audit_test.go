@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +25,9 @@ func TestAppendReadAllPreservesExactUnicodeAndPermissions(t *testing.T) {
 	t.Cleanup(func() { _ = log.Close() })
 
 	text := "precomposed caf\u00e9 / decomposed cafe\u0301\r\nemoji: \U0001f9d1\U0001f3fd\u200d\U0001f4bb\nquotes: \\\" <>& \u2028"
-	entry, err := log.Append(testEvent("event-1", text))
+	event := testEvent("event-1", text)
+	event.Details = map[string]string{"model_explanation": "sensitive-derived-detail"}
+	entry, err := log.Append(event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +75,20 @@ func TestAppendReadAllPreservesExactUnicodeAndPermissions(t *testing.T) {
 	}
 	if got := fileInfo.Mode().Perm(); got != 0o600 {
 		t.Fatalf("file mode = %o, want 600", got)
+	}
+	raw, err := os.ReadFile(log.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(text)) || bytes.Contains(raw, []byte("sensitive-derived-detail")) || !bytes.Contains(raw, []byte(`"payload_ciphertext"`)) {
+		t.Fatalf("audit record exposed plaintext or omitted ciphertext: %q", raw)
+	}
+	keyInfo, err := os.Stat(filepath.Join(dir, keyFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := keyInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("key mode = %o, want 600", got)
 	}
 }
 
@@ -315,6 +332,31 @@ func TestReopenContinuesVerifiedChain(t *testing.T) {
 	}
 	if entry2.Seq != 2 || entry2.PreviousHash != entry1.EntryHash {
 		t.Fatalf("chain was not continued: %#v", entry2)
+	}
+}
+
+func TestMissingEncryptionKeyFailsClosedWithoutReplacement(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "audit")
+	log, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Append(testEvent("event-1", "secret text")); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, keyFileName)
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := Open(dir); err == nil {
+		_ = reopened.Close()
+		t.Fatal("Open regenerated a missing key for a non-empty log")
+	}
+	if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing key was replaced: %v", err)
 	}
 }
 
@@ -863,7 +905,7 @@ func TestWriteOrSyncUncertaintyPoisonsHandleUntilVerifiedReopen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.HasSuffix(string(raw), "\n") || !strings.Contains(string(raw), "fully written reply") {
+			if !strings.HasSuffix(string(raw), "\n") || strings.Contains(string(raw), "fully written reply") || !strings.Contains(string(raw), "payload_ciphertext") {
 				t.Fatalf("injected failure did not follow a complete write: %q", raw)
 			}
 

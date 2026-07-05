@@ -71,7 +71,7 @@ func newEndpoint(t *testing.T, name string, peers map[string]string, evaluator g
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = approvals.Close() })
-	service, err := New(Options{Audit: log, Signer: signer, Peers: peers, Guard: evaluator, Approvals: approvals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1, MaxRequestsPerMinute: maxRequestsPerMinute, MaxGuardCallsPerHour: maxGuardCallsPerHour})
+	service, err := New(Options{Audit: log, Signer: signer, Peers: peers, Guard: evaluator, Approvals: approvals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", DeploymentSHA256: strings.Repeat("a", 64), MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1, MaxRequestsPerMinute: maxRequestsPerMinute, MaxGuardCallsPerHour: maxGuardCallsPerHour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestRestartIssuesAcknowledgementForCommittedAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := New(Options{Audit: reopenedLog, Signer: reopenedSigner, Peers: map[string]string{"work": work.signer.PublicKey()}, Guard: personalGuard, Approvals: reopenedApprovals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1, MaxRequestsPerMinute: maxRequestsPerMinute, MaxGuardCallsPerHour: maxGuardCallsPerHour})
+	reopened, err := New(Options{Audit: reopenedLog, Signer: reopenedSigner, Peers: map[string]string{"work": work.signer.PublicKey()}, Guard: personalGuard, Approvals: reopenedApprovals, Policy: "allow routine coordination only", PolicyVersion: "test-v1", DeploymentSHA256: strings.Repeat("a", 64), MaxMessageBytes: 4096, Timeout: time.Second, MaxMessageAge: 24 * time.Hour, MaxConcurrent: 1, MaxRequestsPerMinute: maxRequestsPerMinute, MaxGuardCallsPerHour: maxGuardCallsPerHour})
 	if err != nil {
 		t.Fatal(err)
 	}

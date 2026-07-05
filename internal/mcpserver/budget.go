@@ -16,7 +16,7 @@ func newWindowBudget(limit int, window time.Duration) *windowBudget {
 	return &windowBudget{limit: limit, window: window, used: make([]time.Time, 0, limit)}
 }
 
-func (b *windowBudget) take(now time.Time) bool {
+func (b *windowBudget) Take(now time.Time) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -33,8 +33,8 @@ func (b *windowBudget) take(now time.Time) bool {
 		b.used = b.used[:0]
 	}
 	if len(b.used) >= b.limit {
-		return false
+		return false, nil
 	}
 	b.used = append(b.used, now)
-	return true
+	return true, nil
 }

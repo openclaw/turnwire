@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/openclaw/turnwire/internal/approval"
 	"github.com/openclaw/turnwire/internal/audit"
+	"github.com/openclaw/turnwire/internal/budget"
 	"github.com/openclaw/turnwire/internal/guard"
 	"github.com/openclaw/turnwire/internal/identity"
 )
@@ -41,6 +43,7 @@ type Options struct {
 	Approvals            *approval.Store
 	Policy               string
 	PolicyVersion        string
+	DeploymentSHA256     string
 	MaxMessageBytes      int
 	Timeout              time.Duration
 	MaxMessageAge        time.Duration
@@ -66,22 +69,24 @@ type receivedRecord struct {
 }
 
 type Service struct {
-	audit           *audit.Log
-	signer          *identity.Signer
-	peers           map[string]string
-	guard           guard.Evaluator
-	approvals       *approval.Store
-	policy          string
-	policyVersion   string
-	maxMessageBytes int
-	timeout         time.Duration
-	maxMessageAge   time.Duration
-	semaphore       chan struct{}
-	requestBudget   *windowBudget
-	guardBudget     *windowBudget
-	now             func() time.Time
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
+	audit            *audit.Log
+	signer           *identity.Signer
+	peers            map[string]string
+	guard            guard.Evaluator
+	approvals        *approval.Store
+	policy           string
+	policyVersion    string
+	deploymentSHA256 string
+	maxMessageBytes  int
+	timeout          time.Duration
+	maxMessageAge    time.Duration
+	semaphore        chan struct{}
+	requestBudget    limiter
+	guardBudget      limiter
+	budgetClosers    []*budget.Counter
+	now              func() time.Time
+	lifecycleCtx     context.Context
+	lifecycleCancel  context.CancelFunc
 
 	mu           sync.Mutex
 	closing      bool
@@ -97,6 +102,21 @@ type Service struct {
 	drained      chan struct{}
 }
 
+type limiter interface {
+	Take(time.Time) (bool, error)
+}
+
+func takeBudget(counter limiter, now time.Time) error {
+	allowed, err := counter.Take(now)
+	if err != nil {
+		return fmt.Errorf("%w: durable budget unavailable", ErrRateLimited)
+	}
+	if !allowed {
+		return ErrRateLimited
+	}
+	return nil
+}
+
 func New(opts Options) (*Service, error) {
 	if opts.Audit == nil || opts.Signer == nil || opts.Guard == nil || opts.Approvals == nil {
 		return nil, errors.New("audit, identity, guard, and approval store are required")
@@ -109,18 +129,35 @@ func New(opts Options) (*Service, error) {
 	if strings.TrimSpace(opts.Policy) == "" || strings.TrimSpace(opts.PolicyVersion) == "" {
 		return nil, errors.New("guard policy and version are required")
 	}
+	if len(opts.DeploymentSHA256) != 64 {
+		return nil, errors.New("deployment SHA-256 is required")
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	budgetDir := filepath.Dir(opts.Audit.Path())
+	requestBudget, err := budget.Open(budgetDir, "service-requests", opts.MaxRequestsPerMinute, time.Minute)
+	if err != nil {
+		lifecycleCancel()
+		return nil, fmt.Errorf("open request budget: %w", err)
+	}
+	guardBudget, err := budget.Open(budgetDir, "guard-calls", opts.MaxGuardCallsPerHour, time.Hour)
+	if err != nil {
+		_ = requestBudget.Close()
+		lifecycleCancel()
+		return nil, fmt.Errorf("open guard budget: %w", err)
+	}
 	service := &Service{
 		audit: opts.Audit, signer: opts.Signer, peers: clonePeers(opts.Peers), guard: opts.Guard,
 		approvals: opts.Approvals, policy: opts.Policy, policyVersion: opts.PolicyVersion,
-		maxMessageBytes: opts.MaxMessageBytes, timeout: opts.Timeout, maxMessageAge: opts.MaxMessageAge,
+		deploymentSHA256: opts.DeploymentSHA256,
+		maxMessageBytes:  opts.MaxMessageBytes, timeout: opts.Timeout, maxMessageAge: opts.MaxMessageAge,
 		semaphore:     make(chan struct{}, opts.MaxConcurrent),
-		requestBudget: newWindowBudget(opts.MaxRequestsPerMinute, time.Minute),
-		guardBudget:   newWindowBudget(opts.MaxGuardCallsPerHour, time.Hour),
+		requestBudget: requestBudget,
+		guardBudget:   guardBudget,
+		budgetClosers: []*budget.Counter{requestBudget, guardBudget},
 		now:           now,
 		active:        make(map[string]string), requests: make(map[string]requestRecord),
 		sent: make(map[string]Envelope), received: make(map[string]receivedRecord), seenInbound: make(map[string]string),
@@ -128,6 +165,8 @@ func New(opts Options) (*Service, error) {
 		drained:   make(chan struct{}), lifecycleCtx: lifecycleCtx, lifecycleCancel: lifecycleCancel,
 	}
 	if err := service.rebuildIndex(); err != nil {
+		_ = requestBudget.Close()
+		_ = guardBudget.Close()
 		lifecycleCancel()
 		return nil, err
 	}
@@ -138,8 +177,11 @@ func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error)
 	if err := ctx.Err(); err != nil {
 		return SendOutput{}, err
 	}
-	if !s.requestBudget.take(s.now()) {
-		return SendOutput{}, ErrRateLimited
+	if s.isClosing() {
+		return SendOutput{}, ErrClosed
+	}
+	if err := takeBudget(s.requestBudget, s.now()); err != nil {
+		return SendOutput{}, err
 	}
 	input, err := normalizeSend(input, s.maxMessageBytes)
 	if err != nil {
@@ -249,8 +291,11 @@ func (s *Service) Receive(ctx context.Context, input ReceiveInput) (ReceiveOutpu
 	if err := ctx.Err(); err != nil {
 		return ReceiveOutput{}, err
 	}
-	if !s.requestBudget.take(s.now()) {
-		return ReceiveOutput{}, ErrRateLimited
+	if s.isClosing() {
+		return ReceiveOutput{}, ErrClosed
+	}
+	if err := takeBudget(s.requestBudget, s.now()); err != nil {
+		return ReceiveOutput{}, err
 	}
 	envelope := input.Envelope
 	envelopeHash, err := s.validateEnvelope(envelope)
@@ -379,8 +424,11 @@ func (s *Service) Confirm(ctx context.Context, input ConfirmInput) (ConfirmOutpu
 	if err := ctx.Err(); err != nil {
 		return ConfirmOutput{}, err
 	}
-	if !s.requestBudget.take(s.now()) {
-		return ConfirmOutput{}, ErrRateLimited
+	if s.isClosing() {
+		return ConfirmOutput{}, ErrClosed
+	}
+	if err := takeBudget(s.requestBudget, s.now()); err != nil {
+		return ConfirmOutput{}, err
 	}
 	ack := input.Acknowledgement
 	if ack.Version != 1 || !validID(ack.MessageID) || !validID(ack.Source) || ack.Destination != s.signer.Name() ||
@@ -431,8 +479,11 @@ func (s *Service) Confirm(ctx context.Context, input ConfirmInput) (ConfirmOutpu
 }
 
 func (s *Service) Inbox(_ context.Context, input InboxInput) (InboxOutput, error) {
-	if !s.requestBudget.take(s.now()) {
-		return InboxOutput{}, ErrRateLimited
+	if s.isClosing() {
+		return InboxOutput{}, ErrClosed
+	}
+	if err := takeBudget(s.requestBudget, s.now()); err != nil {
+		return InboxOutput{}, err
 	}
 	release, err := s.beginOperation()
 	if err != nil {
@@ -490,8 +541,11 @@ func (s *Service) Inbox(_ context.Context, input InboxInput) (InboxOutput, error
 }
 
 func (s *Service) Checkpoint() (identity.Checkpoint, error) {
-	if !s.requestBudget.take(s.now()) {
-		return identity.Checkpoint{}, ErrRateLimited
+	if s.isClosing() {
+		return identity.Checkpoint{}, ErrClosed
+	}
+	if err := takeBudget(s.requestBudget, s.now()); err != nil {
+		return identity.Checkpoint{}, err
 	}
 	release, err := s.beginOperation()
 	if err != nil {
@@ -502,7 +556,13 @@ func (s *Service) Checkpoint() (identity.Checkpoint, error) {
 	if err != nil {
 		return identity.Checkpoint{}, err
 	}
-	return s.signer.Checkpoint(sequence, head, s.now())
+	return s.signer.Checkpoint(sequence, head, s.deploymentSHA256, s.now())
+}
+
+func (s *Service) isClosing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closing
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
@@ -517,7 +577,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-s.drained:
-		return nil
+		var closeErr error
+		for _, counter := range s.budgetClosers {
+			closeErr = errors.Join(closeErr, counter.Close())
+		}
+		return closeErr
 	}
 }
 
@@ -539,12 +603,12 @@ func (s *Service) evaluate(ctx context.Context, messageID, requestID, conversati
 	if deterministicDecision == guard.DecisionDeny {
 		return deterministicDecision, deterministicReason, guard.Evaluation{Model: "not_called"}, entry, nil
 	}
-	if !s.guardBudget.take(s.now()) {
+	if err := takeBudget(s.guardBudget, s.now()); err != nil {
 		failed, appendErr := s.appendEvent(messageID, requestID, conversationID, eventGuardFailed, "failed", "guard_budget_exhausted", "", messageDetails(direction, source, destination, messageID))
 		if appendErr != nil {
-			return "", "", guard.Evaluation{}, audit.Entry{}, errors.Join(ErrRateLimited, appendErr)
+			return "", "", guard.Evaluation{}, audit.Entry{}, errors.Join(err, appendErr)
 		}
-		return "", "", guard.Evaluation{}, failed, ErrRateLimited
+		return "", "", guard.Evaluation{}, failed, err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	stopShutdownCancel := context.AfterFunc(s.lifecycleCtx, cancel)

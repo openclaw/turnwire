@@ -32,7 +32,7 @@ work agent / OpenAI                                      personal agent / OpenAI
         |          signed envelope -- agent ------->                 |
         |                 <---- signed acknowledgement               |
         v                                                           v
- work audit.jsonl                                       personal audit.jsonl
+ encrypted work audit                                  encrypted personal audit
 ```
 
 1. `send_message` records the proposal locally, runs deterministic secret/DLP
@@ -70,13 +70,15 @@ Tunnel is transport, not generic host-to-host networking.
 - Endpoints trust only configured peer public keys. Envelopes and delivery
   acknowledgements are Ed25519 signed.
 - Exact text, decisions, policy/model, OpenAI response and `x-request-id`, peer
-  identities, hashes, and receipts enter a synced hash-chained local log.
-- Signed audit checkpoints can be independently stored to detect later
-  whole-log replacement or truncation.
+  identities, hashes, and receipts enter a synced, AES-GCM-encrypted,
+  hash-chained local log.
+- Every service start records the executable, build, config, policy, peer set,
+  public key, and declared deployment identity. Signed checkpoints bind that
+  deployment digest to the current audit head.
 - MCP emits one structured result, rejects JSON-RPC batches, and caps every
   input frame and output frame. Inbox reads stop at a fixed encoded-byte cap.
-- Per-process request and guard-call budgets bound request floods and model
-  spend. Exhaustion fails closed; counters reset when the process restarts.
+- Fsynced request, raw-frame, and guard-call budgets survive restarts and clock
+  rollback. Exhaustion or unreadable accounting fails closed.
 
 For strongest OpenAI-side controls, use a dedicated API project approved for
 Zero Data Retention. `store: false` alone does not remove default abuse-
@@ -97,16 +99,16 @@ Work machine:
 
 ```bash
 go build -o ./bin/turnwire ./cmd/turnwire
-./bin/turnwire init --identity work
-./bin/turnwire identity
+./bin/turnwire init --identity work --deployment-id turnwire-work
+./bin/turnwire identity show
 ```
 
 Personal machine:
 
 ```bash
 go build -o ./bin/turnwire ./cmd/turnwire
-./bin/turnwire init --identity personal
-./bin/turnwire identity
+./bin/turnwire init --identity personal --deployment-id turnwire-personal
+./bin/turnwire identity show
 ```
 
 Exchange only the printed public keys, then pin each peer:
@@ -181,12 +183,15 @@ Audit commands:
 turnwire log list [--type TYPE] [--limit N] [--json]
 turnwire log show ID [--json]
 turnwire log verify [--json]
+turnwire log export --output AUDIT-METADATA.jsonl
 turnwire checkpoint
 ```
 
-Store periodic checkpoints outside the endpoint. Reconcile message IDs, hashes,
-signed acknowledgements, model/request IDs, and available OpenAI custom-app
-invocation logs.
+The export omits message text and model explanations, retains reconciliation
+metadata and chain hashes, and ends with a signed checkpoint. Copy exports and
+periodic checkpoints to immutable storage outside the endpoint. Reconcile
+message IDs, hashes, signed acknowledgements, model/request IDs, deployment
+digests, and available OpenAI custom-app invocation logs.
 
 ## Important limits
 
@@ -197,12 +202,15 @@ invocation logs.
   leakage.
 - Tunnel authorization controls the app path. Stdio does not expose a verified
   individual human caller identity; logs identify endpoint and peer.
-- A host administrator can replace binary, keys, policy, approvals, or log.
+- A host administrator can replace binary, keys, policy, approvals, log, or the
+  local audit-encryption key. External checkpoints and exports make later
+  replacement detectable; full-disk encryption still matters.
 - The agent carries released envelopes; Turnwire does not directly connect
   hosts.
 - Text only. Attachments and arbitrary host access remain out of scope.
 
-Read the [threat model](docs/threat-model.md) and
+Read the [deployment and operations runbook](docs/deployment.md),
+[threat model](docs/threat-model.md), and
 [configuration reference](docs/configuration.md) before deployment.
 
 ## Development

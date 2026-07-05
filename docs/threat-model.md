@@ -79,7 +79,10 @@ source independently verifies and logs that acknowledgement.
 - JSON-RPC batches rejected; successful tools return one structured result
   without a duplicate text serialization.
 - Synced canonical hash-chain events before externally visible transitions.
-- Signed checkpoints for independent anchoring.
+- Startup measurement of binary, build, config, policy, peers, identity, and
+  deployment ID; signed checkpoints bind the measurement to the audit head.
+- AES-256-GCM audit text encryption and redacted signed metadata exports.
+- Restart-durable, fsynced request, raw-frame, and model-call budgets.
 - Public MCP errors omit provider URLs, env names, paths, backend details.
 
 ## OpenAI boundary
@@ -110,15 +113,18 @@ reconciliation but are not a mirrored Turnwire ledger.
 - The agent carries envelope JSON. Turnwire does not directly connect hosts.
 - Work-to-personal app association can violate policy even when Turnwire works.
   Administrative approval is external.
-- Plaintext remains in owner-only audit and pending files. Disk encryption,
-  backup controls, retention, and secure deletion are deployment duties.
-- A compromised endpoint/key can sign malicious envelopes. Key revocation is
-  currently manual peer removal/config replacement.
-- Checkpoints prove endpoint-key possession, not uncompromised host or human
-  authorship.
+- Plaintext remains in process memory and pending approval records. The audit
+  log is encrypted, but its key is on the same host; disk encryption, backup
+  controls, retention, and secure deletion remain deployment duties.
+- A compromised endpoint/key can sign malicious envelopes. Dual-signed key
+  rotation, signed local revocation, and peer removal are explicit operator
+  actions; there is no online certificate authority.
+- Checkpoints prove endpoint-key possession and bind operator-measured bytes;
+  they do not prove an uncompromised host, a genuine remote tunnel association,
+  or human authorship.
 - Availability depends on OpenAI, tunnel, guard API, clocks, disk, endpoints.
-- Request and model-call budgets are in-memory and reset on process restart;
-  enforce project-level OpenAI budgets independently.
+- Local budgets survive restart, but enforce project-level OpenAI budgets and
+  rate limits independently as a second control.
 - Windows fails closed until owner-only DACL validation exists.
 
 ## Deployment requirements
@@ -131,4 +137,4 @@ reconciliation but are not a mirrored Turnwire ledger.
 - Periodic checkpoint storage in both administrative domains.
 - Reconcile release, acceptance, acknowledgement, local heads, guard request
   IDs, and available OpenAI logs.
-- Document key rotation, peer removal, archival, incident response, revocation.
+- Follow the checked-in key rotation, export, retention, and kill-switch runbook.
