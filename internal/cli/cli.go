@@ -245,6 +245,7 @@ const initHelp = `Usage:
 Flags:
   --force                       Replace an existing configuration
   --identity NAME               Endpoint identity (for example, work or personal)
+  --deployment-id ID            Tunnel or custom-app deployment identity
   --endpoint URL                OpenAI Responses endpoint
   --model NAME                  Guard model (default pinned GPT-5.4 snapshot)
   --api-key-env NAME            API key environment variable
@@ -272,6 +273,7 @@ const logHelp = `Usage:
   turnwire [global flags] log list [--conversation ID] [--limit N] [--json]
   turnwire [global flags] log show [--json] ID
   turnwire [global flags] log verify [--json]
+  turnwire [global flags] log export --output PATH
 `
 
 const versionHelp = `Usage:
@@ -279,11 +281,15 @@ const versionHelp = `Usage:
 `
 
 const identityHelp = `Usage:
-  turnwire [global flags] identity [--json]
+  turnwire [global flags] identity show [--json]
+  turnwire [global flags] identity rotate --force --output PATH
+  turnwire [global flags] identity revoke --force --output PATH
 `
 
 const peerHelp = `Usage:
   turnwire [global flags] peer add NAME PUBLIC_KEY
+  turnwire [global flags] peer rotate NAME ROTATION_FILE
+  turnwire [global flags] peer remove --force NAME
 `
 
 const approveHelp = `Usage:

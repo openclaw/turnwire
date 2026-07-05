@@ -43,13 +43,17 @@ type requestLimitedStream struct {
 	stopped        bool
 	maxInFlight    int
 	maxOutputBytes int
-	requestBudget  *windowBudget
+	requestBudget  limiter
 	pending        map[jsonrpc.ID]struct{}
 	responding     int
 	nonCalls       int
 	readBuffer     []byte
 	closeErr       error
 	reportError    func(error)
+}
+
+type limiter interface {
+	Take(time.Time) (bool, error)
 }
 
 func newRequestLimitedStream(reader *boundedFrameReadCloser, writer io.WriteCloser, maxInFlight, maxOutputBytes, maxRequestsPerMinute int) *requestLimitedStream {
@@ -164,7 +168,8 @@ func (s *requestLimitedStream) Close() error {
 func (s *requestLimitedStream) admitFrame(frame []byte) ([]byte, []*jsonrpc.Response, error) {
 	// Charge every bounded JSON frame before JSON-RPC decoding. This includes
 	// malformed call-shaped objects that the SDK would reject before dispatch.
-	if !s.requestBudget.take(time.Now()) {
+	allowed, budgetErr := s.requestBudget.Take(time.Now())
+	if budgetErr != nil || !allowed {
 		return nil, nil, errRequestBudgetExhausted
 	}
 	message, decoded, err := decodeJSONRPCFrame(frame)

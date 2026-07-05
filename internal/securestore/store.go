@@ -2,6 +2,8 @@
 package securestore
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -98,6 +100,79 @@ func (s *Store) Create(name string, data []byte) error {
 		return fmt.Errorf("sync secure store directory: %w", err)
 	}
 	return nil
+}
+
+// Replace atomically writes and syncs an owner-only value. The destination is
+// selected relative to the already-validated directory descriptor.
+func (s *Store) Replace(name string, data []byte) error {
+	if err := validateName(name); err != nil {
+		return err
+	}
+	if len(data) == 0 || len(data) > maxFileBytes {
+		return errors.New("secure store value has an invalid size")
+	}
+	var temporaryName string
+	var temporary *os.File
+	for attempt := 0; attempt < 100; attempt++ {
+		var random [12]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return fmt.Errorf("generate secure store temporary name: %w", err)
+		}
+		temporaryName = ".turnwire-" + hex.EncodeToString(random[:]) + ".tmp"
+		file, err := owneronly.OpenAtNoFollow(s.directory, temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("create secure store temporary value: %w", err)
+		}
+		temporary = file
+		break
+	}
+	if temporary == nil {
+		return errors.New("create secure store temporary value: too many name collisions")
+	}
+	cleanup := true
+	defer func() {
+		_ = temporary.Close()
+		if cleanup {
+			_ = owneronly.UnlinkAt(s.directory, temporaryName)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure stored value: %w", err)
+	}
+	if _, err := owneronly.Validate(temporary, owneronly.RegularFile, "secure stored value"); err != nil {
+		return err
+	}
+	if err := writeAll(temporary, data); err != nil {
+		return fmt.Errorf("write secure stored value: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync secure stored value: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close secure stored value: %w", err)
+	}
+	if err := owneronly.RenameAt(s.directory, temporaryName, name); err != nil {
+		return fmt.Errorf("replace secure stored value: %w", err)
+	}
+	cleanup = false
+	if err := s.directory.Sync(); err != nil {
+		return fmt.Errorf("sync secure store directory: %w", err)
+	}
+	return nil
+}
+
+// Delete durably removes one secure value.
+func (s *Store) Delete(name string) error {
+	if err := validateName(name); err != nil {
+		return err
+	}
+	if err := owneronly.UnlinkAt(s.directory, name); err != nil {
+		return err
+	}
+	return s.directory.Sync()
 }
 
 // Read reads one validated owner-only file with a fixed memory bound.

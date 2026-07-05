@@ -4,7 +4,11 @@ package audit
 import (
 	"bufio"
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,11 +23,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/openclaw/turnwire/internal/owneronly"
+	"github.com/openclaw/turnwire/internal/securestore"
 )
 
 const (
 	// FileName is the fixed file name used inside an audit directory.
-	FileName = "audit.jsonl"
+	FileName    = "audit.jsonl"
+	keyFileName = "audit.key"
 	// DefaultMaxBytes bounds the audit log when callers do not select a
 	// deployment-specific quota.
 	DefaultMaxBytes int64 = 256 << 20
@@ -86,6 +92,31 @@ type Entry struct {
 	EntryHash      string            `json:"entry_hash"`
 }
 
+// storedEntry is the only on-disk audit representation. Sensitive fields are
+// never serialized in plaintext; the entry hash is authenticated as AES-GCM
+// associated data and still binds the decrypted payload and chain metadata.
+type storedEntry struct {
+	Seq               uint64 `json:"seq"`
+	Timestamp         string `json:"timestamp"`
+	PayloadCiphertext string `json:"payload_ciphertext"`
+	PayloadNonce      string `json:"payload_nonce"`
+	PreviousHash      string `json:"previous_hash"`
+	EntryHash         string `json:"entry_hash"`
+}
+
+type storedPayload struct {
+	EventID        string            `json:"event_id"`
+	ExchangeID     string            `json:"exchange_id"`
+	RequestID      string            `json:"request_id"`
+	ConversationID string            `json:"conversation_id"`
+	Type           string            `json:"type"`
+	Status         string            `json:"status"`
+	ErrorCode      string            `json:"error_code"`
+	Text           string            `json:"text"`
+	TextSHA256     string            `json:"text_sha256"`
+	Details        map[string]string `json:"details,omitempty"`
+}
+
 // EntryReference identifies one verified entry in the append-only log without
 // retaining its text in memory. References are valid for the lifetime of the
 // log: successful appends never move existing bytes.
@@ -125,6 +156,7 @@ type Log struct {
 	maxBytes      int64
 	failed        error
 	io            auditIO
+	cipher        cipher.AEAD
 }
 
 // Open creates or opens an audit directory, enforces restrictive permissions,
@@ -168,7 +200,7 @@ func openWithQuotaAndIO(dir string, maxBytes int64, ioOps auditIO) (*Log, error)
 	}()
 
 	path := filepath.Join(dir, FileName)
-	file, _, err := openAuditFile(directory, true, true)
+	file, fileCreated, err := openAuditFile(directory, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +212,14 @@ func openWithQuotaAndIO(dir string, maxBytes int64, ioOps auditIO) (*Log, error)
 		_ = unlockFile(file)
 		_ = file.Close()
 		return nil, openErr
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return closeOnError(fmt.Errorf("inspect audit file: %w", err))
+	}
+	aead, err := loadAuditCipher(dir, fileCreated || fileInfo.Size() == 0)
+	if err != nil {
+		return closeOnError(fmt.Errorf("load audit encryption key: %w", err))
 	}
 	// Flush both the file metadata and its directory entry before any append can
 	// be reported durable. This also completes recovery after a prior interrupted
@@ -202,7 +242,7 @@ func openWithQuotaAndIO(dir string, maxBytes int64, ioOps auditIO) (*Log, error)
 	}
 	directoryOpen = false
 
-	summary, err := scanAndVerify(file, nil)
+	summary, err := scanAndVerify(file, aead, nil)
 	if err != nil {
 		return closeOnError(fmt.Errorf("verify audit log: %w", err))
 	}
@@ -215,8 +255,34 @@ func openWithQuotaAndIO(dir string, maxBytes int64, ioOps auditIO) (*Log, error)
 		size:          summary.size,
 		maxBytes:      maxBytes,
 		io:            ioOps,
+		cipher:        aead,
 	}
 	return log, nil
+}
+
+func loadAuditCipher(dir string, create bool) (cipher.AEAD, error) {
+	store, err := securestore.Open(dir, create, "audit key directory")
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	key, err := store.Read(keyFileName)
+	if errors.Is(err, os.ErrNotExist) && create {
+		key = make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return nil, fmt.Errorf("generate audit key: %w", err)
+		}
+		if err := store.Create(keyFileName, key); err != nil {
+			return nil, fmt.Errorf("store audit key: %w", err)
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, errors.New("audit encryption key has an invalid size")
+	}
+	return cipher.NewGCM(block)
 }
 
 func secureStorageSupported() bool {
@@ -475,7 +541,11 @@ func (l *Log) AppendWithReference(event Event) (Entry, EntryReference, error) {
 		return Entry{}, EntryReference{}, err
 	}
 	entry.EntryHash = entryHash
-	line, err := json.Marshal(entry)
+	stored, err := encryptEntry(l.cipher, entry)
+	if err != nil {
+		return Entry{}, EntryReference{}, err
+	}
+	line, err := json.Marshal(stored)
 	if err != nil {
 		return Entry{}, EntryReference{}, fmt.Errorf("encode audit entry: %w", err)
 	}
@@ -532,7 +602,7 @@ func (l *Log) ReadAll() ([]Entry, error) {
 	if err := l.readyLocked(); err != nil {
 		return nil, err
 	}
-	return readAndVerify(l.file)
+	return readAndVerify(l.file, l.cipher)
 }
 
 // Scan verifies the complete chain and calls visit once for each entry while
@@ -559,7 +629,7 @@ func (l *Log) ScanWithReferences(visit func(Entry, EntryReference) error) error 
 	if visit == nil {
 		return errors.New("audit visitor is required")
 	}
-	_, err := scanAndVerify(l.file, visit)
+	_, err := scanAndVerify(l.file, l.cipher, visit)
 	return err
 }
 
@@ -588,7 +658,7 @@ func (l *Log) ReadReference(reference EntryReference) (Entry, error) {
 	if line[len(line)-1] != '\n' {
 		return Entry{}, errors.New("referenced audit entry is incomplete")
 	}
-	entry, err := decodeEntry(line[:len(line)-1])
+	entry, err := decodeEntry(line[:len(line)-1], l.cipher)
 	if err != nil {
 		return Entry{}, fmt.Errorf("decode referenced audit entry: %w", err)
 	}
@@ -608,7 +678,7 @@ func (l *Log) Verify() error {
 	if err := l.readyLocked(); err != nil {
 		return err
 	}
-	_, err := scanAndVerify(l.file, nil)
+	_, err := scanAndVerify(l.file, l.cipher, nil)
 	return err
 }
 
@@ -642,7 +712,11 @@ func ReadAll(dir string) ([]Entry, error) {
 		return nil, err
 	}
 	defer closeExistingAudit(directory, file)
-	return readAndVerify(file)
+	aead, err := loadAuditCipher(dir, false)
+	if err != nil {
+		return nil, fmt.Errorf("load audit encryption key: %w", err)
+	}
+	return readAndVerify(file, aead)
 }
 
 // Scan verifies the complete chain and calls visit once for each entry. Entries
@@ -656,7 +730,11 @@ func Scan(dir string, visit func(Entry) error) error {
 		return err
 	}
 	defer closeExistingAudit(directory, file)
-	_, err = scanAndVerify(file, func(entry Entry, _ EntryReference) error {
+	aead, err := loadAuditCipher(dir, false)
+	if err != nil {
+		return fmt.Errorf("load audit encryption key: %w", err)
+	}
+	_, err = scanAndVerify(file, aead, func(entry Entry, _ EntryReference) error {
 		return visit(entry)
 	})
 	return err
@@ -669,7 +747,11 @@ func Verify(dir string) error {
 		return err
 	}
 	defer closeExistingAudit(directory, file)
-	_, err = scanAndVerify(file, nil)
+	aead, err := loadAuditCipher(dir, false)
+	if err != nil {
+		return fmt.Errorf("load audit encryption key: %w", err)
+	}
+	_, err = scanAndVerify(file, aead, nil)
 	return err
 }
 
@@ -726,9 +808,9 @@ func cloneDetails(details map[string]string) map[string]string {
 	return cloned
 }
 
-func readAndVerify(file *os.File) ([]Entry, error) {
+func readAndVerify(file *os.File, aead cipher.AEAD) ([]Entry, error) {
 	entries := make([]Entry, 0)
-	_, err := scanAndVerify(file, func(entry Entry, _ EntryReference) error {
+	_, err := scanAndVerify(file, aead, func(entry Entry, _ EntryReference) error {
 		entries = append(entries, entry)
 		return nil
 	})
@@ -744,7 +826,7 @@ type scanSummary struct {
 	size int64
 }
 
-func scanAndVerify(file *os.File, visit func(Entry, EntryReference) error) (scanSummary, error) {
+func scanAndVerify(file *os.File, aead cipher.AEAD, visit func(Entry, EntryReference) error) (scanSummary, error) {
 	summary := scanSummary{head: genesisHash}
 	info, err := file.Stat()
 	if err != nil {
@@ -776,7 +858,7 @@ func scanAndVerify(file *os.File, visit func(Entry, EntryReference) error) (scan
 		if len(bytes.TrimSpace(line)) == 0 {
 			return summary, fmt.Errorf("entry %d is empty", expectedSeq)
 		}
-		entry, err := decodeEntry(line)
+		entry, err := decodeEntry(line, aead)
 		if err != nil {
 			return summary, fmt.Errorf("decode entry %d: %w", expectedSeq, err)
 		}
@@ -817,11 +899,37 @@ func splitAuditLines(data []byte, atEOF bool) (advance int, token []byte, err er
 	return 0, nil, nil
 }
 
-func decodeEntry(line []byte) (Entry, error) {
+func encryptEntry(aead cipher.AEAD, entry Entry) (storedEntry, error) {
+	if aead == nil {
+		return storedEntry{}, errors.New("audit cipher is required")
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return storedEntry{}, fmt.Errorf("generate audit nonce: %w", err)
+	}
+	payload, err := json.Marshal(storedPayload{
+		EventID: entry.EventID, ExchangeID: entry.ExchangeID, RequestID: entry.RequestID,
+		ConversationID: entry.ConversationID, Type: entry.Type, Status: entry.Status,
+		ErrorCode: entry.ErrorCode, Text: entry.Text, TextSHA256: entry.TextSHA256,
+		Details: entry.Details,
+	})
+	if err != nil {
+		return storedEntry{}, fmt.Errorf("encode audit payload: %w", err)
+	}
+	ciphertext := aead.Seal(nil, nonce, payload, []byte(entry.EntryHash))
+	return storedEntry{
+		Seq: entry.Seq, Timestamp: entry.Timestamp,
+		PayloadCiphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
+		PayloadNonce:      base64.RawStdEncoding.EncodeToString(nonce),
+		PreviousHash:      entry.PreviousHash, EntryHash: entry.EntryHash,
+	}, nil
+}
+
+func decodeEntry(line []byte, aead cipher.AEAD) (Entry, error) {
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
-	var entry Entry
-	if err := decoder.Decode(&entry); err != nil {
+	var stored storedEntry
+	if err := decoder.Decode(&stored); err != nil {
 		return Entry{}, err
 	}
 	var extra any
@@ -831,12 +939,44 @@ func decodeEntry(line []byte) (Entry, error) {
 		}
 		return Entry{}, fmt.Errorf("trailing data: %w", err)
 	}
-	canonical, err := json.Marshal(entry)
+	canonical, err := json.Marshal(stored)
 	if err != nil {
 		return Entry{}, fmt.Errorf("encode canonical entry: %w", err)
 	}
 	if !bytes.Equal(line, canonical) {
 		return Entry{}, errors.New("entry is not canonical JSON")
+	}
+	if aead == nil {
+		return Entry{}, errors.New("audit cipher is required")
+	}
+	nonce, err := base64.RawStdEncoding.DecodeString(stored.PayloadNonce)
+	if err != nil || len(nonce) != aead.NonceSize() {
+		return Entry{}, errors.New("audit text nonce is invalid")
+	}
+	ciphertext, err := base64.RawStdEncoding.DecodeString(stored.PayloadCiphertext)
+	if err != nil || len(ciphertext) < aead.Overhead() {
+		return Entry{}, errors.New("audit text ciphertext is invalid")
+	}
+	plaintext, err := aead.Open(nil, nonce, ciphertext, []byte(stored.EntryHash))
+	if err != nil {
+		return Entry{}, errors.New("audit text authentication failed")
+	}
+	var payload storedPayload
+	payloadDecoder := json.NewDecoder(bytes.NewReader(plaintext))
+	payloadDecoder.DisallowUnknownFields()
+	if err := payloadDecoder.Decode(&payload); err != nil {
+		return Entry{}, errors.New("audit payload is invalid")
+	}
+	var payloadExtra any
+	if err := payloadDecoder.Decode(&payloadExtra); !errors.Is(err, io.EOF) {
+		return Entry{}, errors.New("audit payload has trailing data")
+	}
+	entry := Entry{
+		Seq: stored.Seq, EventID: payload.EventID, ExchangeID: payload.ExchangeID,
+		RequestID: payload.RequestID, ConversationID: payload.ConversationID,
+		Type: payload.Type, Status: payload.Status, ErrorCode: payload.ErrorCode,
+		Timestamp: stored.Timestamp, Text: payload.Text, TextSHA256: payload.TextSHA256,
+		Details: payload.Details, PreviousHash: stored.PreviousHash, EntryHash: stored.EntryHash,
 	}
 	return entry, nil
 }

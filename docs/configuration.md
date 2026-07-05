@@ -25,6 +25,9 @@ Global `--config PATH` and `--data-dir PATH` overrides precede the command.
       }
     ]
   },
+  "deployment": {
+    "id": "turnwire-work"
+  },
   "guard": {
     "api": "responses",
     "endpoint": "https://api.openai.com/v1/responses",
@@ -54,14 +57,28 @@ Unknown fields rejected.
 
 `identity.name` is the signed endpoint address. `turnwire init` generates
 `identity.ed25519` inside owner-only state. The private key never appears in
-config or CLI output. `turnwire identity` prints only the public key.
+config or CLI output. `turnwire identity show` prints only the public key.
 
 Each peer binds an allowed name to a raw-base64 Ed25519 public key. Duplicate
 names, self-peers, malformed keys, and unconfigured destinations fail closed.
 Add peers with `turnwire peer add NAME PUBLIC_KEY`.
 
+`turnwire identity rotate --force --output PATH` writes a transition signed by
+both old and new keys, then replaces the local key. Transfer that JSON out of
+band and run `turnwire peer rotate NAME ROTATION_FILE` on every peer. `turnwire identity
+revoke --force --output PATH` writes a signed certificate/checkpoint bundle and
+destroys the local key;
+remove the peer pin with `turnwire peer remove --force NAME`.
+
 Changing the identity name while reusing a private key changes the signed
 logical identity. Treat that as key management; update both peers explicitly.
+
+## Deployment identity
+
+`deployment.id` is the operator-declared tunnel/custom-app identity. It enters
+every startup attestation and signed checkpoint. Set it to a stable deployment
+identifier that matches the OpenAI-side tunnel/app inventory; it is evidence,
+not a remote proof that OpenAI associated the correct tunnel.
 
 ## Guard
 
@@ -125,8 +142,9 @@ Retrying reruns deterministic and model guards. Approval can override only
 - `max_guard_calls_per_hour`: combined outbound and inbound model calls;
   default 120, maximum 1000.
 
-Budgets are process-local sliding windows and reset on restart. Budget
-exhaustion fails closed. MCP additionally rejects JSON-RPC batches, emits only
+Budgets are fixed-window counters persisted and fsynced before admission. They
+survive restart; clock rollback does not replenish them. Corrupt or unwritable
+accounting fails closed. MCP additionally rejects JSON-RPC batches, emits only
 structured tool results, caps each output frame, and stops `list_messages`
 before its encoded result exceeds the fixed protocol ceiling.
 
@@ -136,11 +154,18 @@ data fail closed.
 
 ## Storage
 
-Config, state, identity keys, approvals, and `audit.jsonl` must be current-user
+Config, state, identity keys, approvals, budget counters, `audit.key`, and
+`audit.jsonl` must be current-user
 owned without group/other access or granting ACLs. Final symlinks rejected.
-Components traversed through held, no-follow descriptors. Audit entries are
-appended and synced before release, acceptance, or acknowledgement returns.
+Components traversed through held, no-follow descriptors. Audit text is
+AES-256-GCM encrypted before it enters `audit.jsonl`; hashes and metadata remain
+available for verification. The key is a separate owner-only state file, not a
+substitute for full-disk encryption or a hardware-backed secret store. Audit
+entries are appended and synced before release, acceptance, or acknowledgement
+returns.
 
-The log is append-only and SHA-256 hash chained; it does not rotate. Stop the
-service, archive complete state plus final signed checkpoint, then select a
-fresh owner-only directory before quota exhaustion.
+The log is append-only and SHA-256 hash chained; deleting or truncating it would
+also remove replay and delivery state. Do not rotate it destructively. Export
+redacted signed metadata periodically, retain the full encrypted state for the
+endpoint's lifetime, monitor quota, and decommission into a new identity/state
+directory before exhaustion. See the deployment runbook.

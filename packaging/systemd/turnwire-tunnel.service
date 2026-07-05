@@ -1,0 +1,33 @@
+[Unit]
+Description=Turnwire Secure MCP Tunnel endpoint
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=turnwire
+Group=turnwire
+StateDirectory=turnwire
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/turnwire
+Environment=HOME=/var/lib/turnwire
+Environment=XDG_CONFIG_HOME=/var/lib/turnwire/config
+Environment=XDG_STATE_HOME=/var/lib/turnwire/state
+ExecStart=/usr/local/bin/tunnel-client run --profile turnwire
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

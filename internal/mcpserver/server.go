@@ -7,10 +7,12 @@ import (
 	"io"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openclaw/turnwire/internal/audit"
+	"github.com/openclaw/turnwire/internal/budget"
 	"github.com/openclaw/turnwire/internal/identity"
 	"github.com/openclaw/turnwire/internal/mailbox"
 )
@@ -161,7 +163,7 @@ func publicToolError(err error) error {
 // validated before the MCP SDK decodes them. If t also implements Shutdown,
 // Run starts that shutdown as soon as transport teardown is observed and waits
 // for both the MCP session and relay workers before returning.
-func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, maxInputBytes, maxConcurrent, maxRequestsPerMinute int) error {
+func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, budgetDir string, maxInputBytes, maxConcurrent, maxRequestsPerMinute int) error {
 	if stdin == nil {
 		return errors.New("MCP input is required")
 	}
@@ -171,6 +173,11 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 	if maxRequestsPerMinute <= 0 {
 		return errors.New("MCP request budget must be positive")
 	}
+	requestBudget, err := budget.Open(budgetDir, "mcp-frames", maxRequestsPerMinute, time.Minute)
+	if err != nil {
+		return fmt.Errorf("open MCP request budget: %w", err)
+	}
+	defer requestBudget.Close()
 	limit, err := frameByteLimit(maxInputBytes)
 	if err != nil {
 		return fmt.Errorf("configure MCP input limit: %w", err)
@@ -188,6 +195,7 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 		mailbox.MaxMCPOutputBytes,
 		maxRequestsPerMinute,
 	)
+	stream.requestBudget = requestBudget
 	stream.reportError = transportErrors.Record
 	reader := newTeardownReadCloser(stream)
 	runDone := make(chan struct{})
