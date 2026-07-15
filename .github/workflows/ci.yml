@@ -14,6 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        gomaxprocs: ["2", "8"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -21,8 +22,14 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
-      - run: go test -race ./...
-      - run: go vet ./...
-      - run: go build -trimpath ./cmd/turnwire
-      - if: runner.os == 'Linux'
+      # Re-run the race detector under a GOMAXPROCS sweep and repeat count to
+      # widen the scheduling windows a single default-GOMAXPROCS pass can miss.
+      - run: go test -race -count=5 ./...
+        env:
+          GOMAXPROCS: ${{ matrix.gomaxprocs }}
+      - if: matrix.gomaxprocs == '2'
+        run: go vet ./...
+      - if: matrix.gomaxprocs == '2'
+        run: go build -trimpath ./cmd/turnwire
+      - if: runner.os == 'Linux' && matrix.gomaxprocs == '2'
         run: GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/turnwire
