@@ -11,6 +11,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -233,3 +234,32 @@ func TestScanLogEntriesFailsWhenRequestedWindowExceedsBudget(t *testing.T) {
 }
 
 var _ io.Writer = failingWriter{}
+
+func TestWriteOutputIgnoresBrokenPipe(t *testing.T) {
+	t.Parallel()
+	err := writeOutput(brokenPipeWriter{}, []byte("hello\n"))
+	if err != nil {
+		t.Fatalf("writeOutput broken pipe: %v", err)
+	}
+}
+
+type brokenPipeWriter struct{}
+
+func (brokenPipeWriter) Write([]byte) (int, error) {
+	return 0, syscall.EPIPE
+}
+
+func TestWriteOutputPropagatesOtherErrors(t *testing.T) {
+	t.Parallel()
+	want := errors.New("disk full")
+	err := writeOutput(errWriter{err: want}, []byte("hello\n"))
+	if !errors.Is(err, want) {
+		t.Fatalf("writeOutput other error: got %v want %v", err, want)
+	}
+}
+
+type errWriter struct{ err error }
+
+func (w errWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
