@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.0 - 2026-07-27
 
 - Initial release of Turnwire as a signed peer mailbox with outbound and inbound GPT-5.4/GPT-5.5 guards, deterministic secret blocking, local hash-bound approvals, delivery acknowledgements, and bilateral audit receipts.
