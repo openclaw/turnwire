@@ -93,6 +93,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	default:
 		err = usageError("unknown command %q", command)
 	}
+	if isBrokenPipe(err) {
+		return 0
+	}
 	if err == nil {
 		return 0
 	}
@@ -175,9 +178,16 @@ func writeRootHelp(w io.Writer) error {
 	return nil
 }
 
+func isBrokenPipe(err error) bool {
+	return errors.Is(err, io.ErrClosedPipe) || isPlatformBrokenPipe(err)
+}
+
 func writeOutput(w io.Writer, data []byte) error {
 	written, err := w.Write(data)
 	if err != nil {
+		if isBrokenPipe(err) {
+			return nil
+		}
 		return err
 	}
 	if written != len(data) {

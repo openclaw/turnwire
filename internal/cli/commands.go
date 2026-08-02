@@ -324,7 +324,9 @@ func runDoctor(ctx context.Context, args []string, opts options, stdout io.Write
 		}
 	} else {
 		for _, check := range report.Checks {
-			fmt.Fprintf(stdout, "%-14s %-4s %s\n", check.Name, strings.ToUpper(check.Status), check.Message)
+			if _, err := fmt.Fprintf(stdout, "%-14s %-4s %s\n", check.Name, strings.ToUpper(check.Status), check.Message); err != nil {
+				return err
+			}
 		}
 	}
 	if !report.OK {
