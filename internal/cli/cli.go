@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"syscall"
 
 	"github.com/openclaw/turnwire/internal/buildinfo"
 )
@@ -94,6 +93,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	default:
 		err = usageError("unknown command %q", command)
 	}
+	if isBrokenPipe(err) {
+		return 0
+	}
 	if err == nil {
 		return 0
 	}
@@ -177,18 +179,7 @@ func writeRootHelp(w io.Writer) error {
 }
 
 func isBrokenPipe(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe) {
-		return true
-	}
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		// Windows ERROR_BROKEN_PIPE (109) and ERROR_NO_DATA (232).
-		return errno == 109 || errno == 232
-	}
-	return false
+	return errors.Is(err, io.ErrClosedPipe) || isPlatformBrokenPipe(err)
 }
 
 func writeOutput(w io.Writer, data []byte) error {

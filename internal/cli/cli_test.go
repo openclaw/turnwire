@@ -11,7 +11,6 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -235,18 +234,20 @@ func TestScanLogEntriesFailsWhenRequestedWindowExceedsBudget(t *testing.T) {
 
 var _ io.Writer = failingWriter{}
 
-func TestWriteOutputIgnoresBrokenPipe(t *testing.T) {
+func TestWriteOutputIgnoresClosedPipe(t *testing.T) {
 	t.Parallel()
-	err := writeOutput(brokenPipeWriter{}, []byte("hello\n"))
+	err := writeOutput(errWriter{err: io.ErrClosedPipe}, []byte("hello\n"))
 	if err != nil {
-		t.Fatalf("writeOutput broken pipe: %v", err)
+		t.Fatalf("writeOutput closed pipe: %v", err)
 	}
 }
 
-type brokenPipeWriter struct{}
-
-func (brokenPipeWriter) Write([]byte) (int, error) {
-	return 0, syscall.EPIPE
+func TestRunIgnoresBrokenPipeFromFormattedOutput(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"version", "--json"}, &bytes.Buffer{}, errWriter{err: io.ErrClosedPipe}, &stderr); code != 0 {
+		t.Fatalf("Run broken pipe exit = %d, stderr = %q", code, stderr.String())
+	}
 }
 
 func TestWriteOutputPropagatesOtherErrors(t *testing.T) {
