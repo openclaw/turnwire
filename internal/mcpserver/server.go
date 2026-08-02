@@ -209,7 +209,9 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 			case <-reader.Terminated():
 			case <-runDone:
 			}
-			done <- lifecycle.Shutdown(context.WithoutCancel(ctx))
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			done <- lifecycle.Shutdown(shutdownCtx)
 		}()
 	}
 
