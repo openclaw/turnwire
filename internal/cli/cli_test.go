@@ -233,3 +233,34 @@ func TestScanLogEntriesFailsWhenRequestedWindowExceedsBudget(t *testing.T) {
 }
 
 var _ io.Writer = failingWriter{}
+
+func TestWriteOutputIgnoresClosedPipe(t *testing.T) {
+	t.Parallel()
+	err := writeOutput(errWriter{err: io.ErrClosedPipe}, []byte("hello\n"))
+	if err != nil {
+		t.Fatalf("writeOutput closed pipe: %v", err)
+	}
+}
+
+func TestRunIgnoresBrokenPipeFromFormattedOutput(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"version", "--json"}, &bytes.Buffer{}, errWriter{err: io.ErrClosedPipe}, &stderr); code != 0 {
+		t.Fatalf("Run broken pipe exit = %d, stderr = %q", code, stderr.String())
+	}
+}
+
+func TestWriteOutputPropagatesOtherErrors(t *testing.T) {
+	t.Parallel()
+	want := errors.New("disk full")
+	err := writeOutput(errWriter{err: want}, []byte("hello\n"))
+	if !errors.Is(err, want) {
+		t.Fatalf("writeOutput other error: got %v want %v", err, want)
+	}
+}
+
+type errWriter struct{ err error }
+
+func (w errWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}

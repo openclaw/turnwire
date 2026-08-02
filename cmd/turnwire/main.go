@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	ignoreBrokenPipeSignal()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	ctx, stop := signalCancellationContext(context.Background(), signals, func() {
