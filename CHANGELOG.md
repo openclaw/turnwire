@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update the MCP Go SDK to 1.7.0 with protocol 2026-07-28 compatibility.
 - Treat closed stdout pipes as clean CLI pipeline completion, thanks @SebTardif.
 
 ## 0.1.0 - 2026-07-27
