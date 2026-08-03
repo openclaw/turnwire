@@ -3,6 +3,7 @@
 ## 0.1.2 - Unreleased
 
 - Bound MCP shutdown so a stuck worker cannot hang process exit, thanks @SebTardif.
+- Refresh the release attestation action and Go tooling dependencies.
 
 ## 0.1.1 - 2026-08-01
 
