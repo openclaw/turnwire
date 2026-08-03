@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.1.2 - Unreleased
+## 0.1.2 - 2026-08-02
 
 - Bound MCP shutdown so a stuck worker cannot hang process exit, thanks @SebTardif.
+- Rewrite the README with clearer installation, setup, security, and operations guidance.
 - Refresh the release attestation action and Go tooling dependencies.
 
 ## 0.1.1 - 2026-08-01
