@@ -1,8 +1,12 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -31,6 +35,29 @@ func (*stubChannel) Inbox(context.Context, mailbox.InboxInput) (mailbox.InboxOut
 	return mailbox.InboxOutput{}, nil
 }
 func (*stubChannel) Checkpoint() (identity.Checkpoint, error) { return identity.Checkpoint{}, nil }
+
+type stuckShutdownChannel struct {
+	stubChannel
+	release chan struct{}
+}
+
+func (s *stuckShutdownChannel) Shutdown(context.Context) error {
+	<-s.release
+	return nil
+}
+
+func TestRunBoundsStuckShutdown(t *testing.T) {
+	channel := &stuckShutdownChannel{release: make(chan struct{})}
+	defer close(channel.release)
+	started := time.Now()
+	err := run(context.Background(), channel, "test", bytes.NewReader(nil), io.Discard, filepath.Join(t.TempDir(), "state"), 1024, 1, 60, 25*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want shutdown deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Run took %v, want one bounded shutdown wait", elapsed)
+	}
+}
 
 func TestSignedMailboxToolsOverInMemoryTransport(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

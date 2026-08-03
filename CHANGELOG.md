@@ -2,6 +2,8 @@
 
 ## 0.1.2 - Unreleased
 
+- Bound MCP shutdown so a stuck worker cannot hang process exit, thanks @SebTardif.
+
 ## 0.1.1 - 2026-08-01
 
 - Update the MCP Go SDK to 1.7.0 with protocol 2026-07-28 compatibility.
