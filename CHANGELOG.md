@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.1.3 - Unreleased
+
 ## 0.1.2 - 2026-08-02
 
 - Bound MCP shutdown so a stuck worker cannot hang process exit, thanks @SebTardif.
