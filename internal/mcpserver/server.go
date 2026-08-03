@@ -17,7 +17,10 @@ import (
 	"github.com/openclaw/turnwire/internal/mailbox"
 )
 
-const transportControlHeadroom = 4
+const (
+	transportControlHeadroom = 4
+	shutdownTimeout          = 10 * time.Second
+)
 
 // sdkServerClosingCode is the go-sdk JSON-RPC extension used when a handler
 // finishes after its peer has closed the read side. The SDK does not export
@@ -164,6 +167,24 @@ func publicToolError(err error) error {
 // Run starts that shutdown as soon as transport teardown is observed and waits
 // for both the MCP session and relay workers before returning.
 func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, budgetDir string, maxInputBytes, maxConcurrent, maxRequestsPerMinute int) error {
+	return run(ctx, channel, version, stdin, stdout, budgetDir, maxInputBytes, maxConcurrent, maxRequestsPerMinute, shutdownTimeout)
+}
+
+func run(ctx context.Context, channel Channel, version string, stdin io.Reader, stdout io.Writer, budgetDir string, maxInputBytes, maxConcurrent, maxRequestsPerMinute int, shutdownTimeout time.Duration) (resultErr error) {
+	var shutdown *boundedShutdown
+	if lifecycle, ok := channel.(shutdowner); ok {
+		shutdown = newBoundedShutdown(ctx, lifecycle, shutdownTimeout)
+	}
+	shutdownHandled := false
+	defer func() {
+		if shutdown == nil || shutdownHandled {
+			return
+		}
+		if err := shutdown.wait(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("shutdown relay: %w", err))
+		}
+	}()
+
 	if stdin == nil {
 		return errors.New("MCP input is required")
 	}
@@ -199,17 +220,14 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 	stream.reportError = transportErrors.Record
 	reader := newTeardownReadCloser(stream)
 	runDone := make(chan struct{})
-	var shutdownDone <-chan error
-	if lifecycle, ok := channel.(shutdowner); ok {
-		done := make(chan error, 1)
-		shutdownDone = done
+	if shutdown != nil {
 		go func() {
 			select {
 			case <-ctx.Done():
 			case <-reader.Terminated():
 			case <-runDone:
 			}
-			done <- lifecycle.Shutdown(context.WithoutCancel(ctx))
+			shutdown.start()
 		}()
 	}
 
@@ -219,10 +237,52 @@ func Run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 	})
 	close(runDone)
 	var shutdownErr error
-	if shutdownDone != nil {
-		shutdownErr = <-shutdownDone
+	if shutdown != nil {
+		shutdownErr = shutdown.wait()
+		shutdownHandled = true
 	}
 	return resolveRunError(runErr, shutdownErr, reader.TerminalError(), transportErrors.Err())
+}
+
+type boundedShutdown struct {
+	baseCtx   context.Context
+	lifecycle shutdowner
+	timeout   time.Duration
+	once      sync.Once
+	ctx       context.Context
+	done      chan struct{}
+	err       error
+}
+
+func newBoundedShutdown(ctx context.Context, lifecycle shutdowner, timeout time.Duration) *boundedShutdown {
+	return &boundedShutdown{baseCtx: ctx, lifecycle: lifecycle, timeout: timeout, done: make(chan struct{})}
+}
+
+func (s *boundedShutdown) start() {
+	s.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), s.timeout)
+		s.ctx = ctx
+		go func() {
+			defer cancel()
+			s.err = s.lifecycle.Shutdown(ctx)
+			close(s.done)
+		}()
+	})
+}
+
+func (s *boundedShutdown) wait() error {
+	s.start()
+	select {
+	case <-s.done:
+		return s.err
+	case <-s.ctx.Done():
+		select {
+		case <-s.done:
+			return s.err
+		default:
+			return s.ctx.Err()
+		}
+	}
 }
 
 // resolveRunError normalizes only the SDK's structured server-closing error

@@ -244,7 +244,6 @@ func runServeWithGuard(ctx context.Context, args []string, opts options, stdin i
 		fmt.Fprintln(stderr, "turnwire: serving signed mailbox MCP over stdio")
 	}
 	serveErr := mcpserver.Run(ctx, service, buildinfo.Current().Version, stdin, stdout, auditDir, cfg.Limits.MaxMessageBytes, cfg.Limits.MaxConcurrent, cfg.Limits.MaxRequestsPerMinute)
-	_ = service.Shutdown(context.Background())
 	if serveErr != nil {
 		if ctx.Err() != nil {
 			return nil
