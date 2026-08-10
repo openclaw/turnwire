@@ -27,17 +27,25 @@ func TestLiveOpenAIGuardModels(t *testing.T) {
 				Endpoint: "https://api.openai.com/v1/responses", Model: test.model,
 				APIKeyEnv: "OPENAI_API_KEY", PromptCacheRetention: test.retention,
 			})
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			result, err := client.Evaluate(ctx, Input{
 				Direction: "outbound", Source: "work", Destination: "personal",
-				Text: "Routine coordination: move tomorrow's meeting to 10:30.",
+				Text:   "Routine coordination: move tomorrow's meeting to 10:30.",
 				Policy: "Allow routine scheduling and coordination without secrets or sensitive data.",
 			})
-			if err != nil { t.Fatal(err) }
-			if result.Model == "" || result.ResponseID == "" || result.ProviderRequestID == "" { t.Fatalf("incomplete provider evidence: %#v", result) }
-			if result.Decision != DecisionAllow && result.Decision != DecisionReview && result.Decision != DecisionDeny { t.Fatalf("invalid decision: %#v", result) }
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Model == "" || result.ResponseID == "" || result.ProviderRequestID == "" {
+				t.Fatalf("incomplete provider evidence: %#v", result)
+			}
+			if result.Decision != DecisionAllow && result.Decision != DecisionReview && result.Decision != DecisionDeny {
+				t.Fatalf("invalid decision: %#v", result)
+			}
 		})
 	}
 }
