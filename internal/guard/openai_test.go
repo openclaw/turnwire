@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResponsesGuardUsesStrictNoToolDataControls(t *testing.T) {
@@ -88,6 +89,50 @@ func TestResponsesGuardRejectsDifferentReturnedModel(t *testing.T) {
 	}
 	if _, err := model.Evaluate(context.Background(), Input{Text: "meeting at 10"}); err == nil || !strings.Contains(err.Error(), "matching provider audit identifiers") {
 		t.Fatalf("model mismatch error = %v", err)
+	}
+}
+
+func TestNewHTTPDefaultClientHasTimeout(t *testing.T) {
+	model, err := NewHTTP(HTTPConfig{Endpoint: "https://example.com/v1/responses", Model: "gpt-5.4-2026-03-05"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.client.Timeout != defaultHTTPClientTimeout {
+		t.Fatalf("default guard HTTP client Timeout = %s, want %s", model.client.Timeout, defaultHTTPClientTimeout)
+	}
+}
+
+func TestNewHTTPHonorsConfiguredTimeout(t *testing.T) {
+	configured := 5 * time.Minute
+	model, err := NewHTTP(HTTPConfig{
+		Endpoint: "https://example.com/v1/responses",
+		Model:    "gpt-5.4-2026-03-05",
+		Timeout:  configured,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.client.Timeout != configured {
+		t.Fatalf("guard HTTP client Timeout = %s, want %s", model.client.Timeout, configured)
+	}
+}
+
+type stubRoundTripper struct{}
+
+func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, http.ErrNotSupported
+}
+
+func TestNewHTTPDoesNotPanicWhenDefaultTransportIsReplaced(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = stubRoundTripper{}
+	model, err := NewHTTP(HTTPConfig{Endpoint: "https://example.com/v1/responses", Model: "gpt-5.4-2026-03-05"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.client == nil || model.client.Timeout != defaultHTTPClientTimeout {
+		t.Fatalf("swapped-transport client Timeout = %s, want %s", model.client.Timeout, defaultHTTPClientTimeout)
 	}
 }
 
