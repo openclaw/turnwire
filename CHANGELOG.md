@@ -2,7 +2,7 @@
 
 ## 0.1.3 - Unreleased
 
-- Bound the default OpenAI guard HTTP client timeout and avoid a panic when DefaultTransport is not *http.Transport, thanks @SebTardif.
+- Bound default OpenAI guard requests while honoring configured call timeouts, and avoid a panic when DefaultTransport is not *http.Transport, thanks @SebTardif.
 
 ## 0.1.2 - 2026-08-02
 

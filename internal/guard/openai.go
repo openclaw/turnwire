@@ -46,6 +46,7 @@ type HTTPConfig struct {
 	Model                string
 	APIKeyEnv            string
 	PromptCacheRetention string
+	Timeout              time.Duration
 	Client               *http.Client
 }
 
@@ -68,6 +69,10 @@ func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
 	}
 	client := cfg.Client
 	if client == nil {
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = defaultHTTPClientTimeout
+		}
 		var transport *http.Transport
 		if base, ok := http.DefaultTransport.(*http.Transport); ok {
 			transport = base.Clone()
@@ -76,7 +81,7 @@ func NewHTTP(cfg HTTPConfig) (*HTTP, error) {
 		}
 		transport.Proxy = nil
 		client = &http.Client{
-			Timeout:   defaultHTTPClientTimeout,
+			Timeout:   timeout,
 			Transport: transport,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return errors.New("guard redirects are disabled")

@@ -197,7 +197,8 @@ func runServeWithGuard(ctx context.Context, args []string, opts options, stdin i
 		return fmt.Errorf("open approvals: %w", err)
 	}
 	defer approvalStore.Close()
-	modelGuard, err := newGuard(guard.HTTPConfig{Endpoint: cfg.Guard.Endpoint, Model: cfg.Guard.Model, APIKeyEnv: cfg.Guard.APIKeyEnv, PromptCacheRetention: cfg.Guard.PromptCacheRetention})
+	timeout, _ := time.ParseDuration(cfg.Limits.Timeout)
+	modelGuard, err := newGuard(guard.HTTPConfig{Endpoint: cfg.Guard.Endpoint, Model: cfg.Guard.Model, APIKeyEnv: cfg.Guard.APIKeyEnv, PromptCacheRetention: cfg.Guard.PromptCacheRetention, Timeout: timeout})
 	if err != nil {
 		return err
 	}
@@ -223,7 +224,6 @@ func runServeWithGuard(ctx context.Context, args []string, opts options, stdin i
 	}); err != nil {
 		return fmt.Errorf("record deployment attestation: %w", err)
 	}
-	timeout, _ := time.ParseDuration(cfg.Limits.Timeout)
 	maxAge, _ := time.ParseDuration(cfg.Limits.MaxMessageAge)
 	peers := make(map[string]string, len(cfg.Identity.Peers))
 	for _, peer := range cfg.Identity.Peers {
@@ -308,7 +308,7 @@ func runDoctor(ctx context.Context, args []string, opts options, stdout io.Write
 			}
 		}
 		if probe && report.OK {
-			modelGuard, guardErr := guard.NewHTTP(guard.HTTPConfig{Endpoint: cfg.Guard.Endpoint, Model: cfg.Guard.Model, APIKeyEnv: cfg.Guard.APIKeyEnv, PromptCacheRetention: cfg.Guard.PromptCacheRetention})
+			modelGuard, guardErr := guard.NewHTTP(guard.HTTPConfig{Endpoint: cfg.Guard.Endpoint, Model: cfg.Guard.Model, APIKeyEnv: cfg.Guard.APIKeyEnv, PromptCacheRetention: cfg.Guard.PromptCacheRetention, Timeout: 30 * time.Second})
 			if guardErr == nil {
 				probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 				_, guardErr = modelGuard.Evaluate(probeCtx, guard.Input{Direction: "outbound", Source: cfg.Identity.Name, Destination: cfg.Identity.Peers[0].Name, Text: probeText, Policy: cfg.Guard.Policy})

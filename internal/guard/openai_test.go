@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResponsesGuardUsesStrictNoToolDataControls(t *testing.T) {
@@ -96,10 +97,24 @@ func TestNewHTTPDefaultClientHasTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.client.Timeout == 0 {
-		t.Fatal("default guard HTTP client Timeout is 0")
+	if model.client.Timeout != defaultHTTPClientTimeout {
+		t.Fatalf("default guard HTTP client Timeout = %s, want %s", model.client.Timeout, defaultHTTPClientTimeout)
 	}
-	t.Logf("default client Timeout=%s", model.client.Timeout)
+}
+
+func TestNewHTTPHonorsConfiguredTimeout(t *testing.T) {
+	configured := 5 * time.Minute
+	model, err := NewHTTP(HTTPConfig{
+		Endpoint: "https://example.com/v1/responses",
+		Model:    "gpt-5.4-2026-03-05",
+		Timeout:  configured,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.client.Timeout != configured {
+		t.Fatalf("guard HTTP client Timeout = %s, want %s", model.client.Timeout, configured)
+	}
 }
 
 type stubRoundTripper struct{}
@@ -116,10 +131,9 @@ func TestNewHTTPDoesNotPanicWhenDefaultTransportIsReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.client == nil || model.client.Timeout == 0 {
-		t.Fatal("default client missing or Timeout is 0 after DefaultTransport swap")
+	if model.client == nil || model.client.Timeout != defaultHTTPClientTimeout {
+		t.Fatalf("swapped-transport client Timeout = %s, want %s", model.client.Timeout, defaultHTTPClientTimeout)
 	}
-	t.Logf("swapped-transport client Timeout=%s", model.client.Timeout)
 }
 
 func TestClassificationMappingCannotProduceContradictoryVerdict(t *testing.T) {
