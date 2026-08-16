@@ -91,6 +91,37 @@ func TestResponsesGuardRejectsDifferentReturnedModel(t *testing.T) {
 	}
 }
 
+func TestNewHTTPDefaultClientHasTimeout(t *testing.T) {
+	model, err := NewHTTP(HTTPConfig{Endpoint: "https://example.com/v1/responses", Model: "gpt-5.4-2026-03-05"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.client.Timeout == 0 {
+		t.Fatal("default guard HTTP client Timeout is 0")
+	}
+	t.Logf("default client Timeout=%s", model.client.Timeout)
+}
+
+type stubRoundTripper struct{}
+
+func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, http.ErrNotSupported
+}
+
+func TestNewHTTPDoesNotPanicWhenDefaultTransportIsReplaced(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = stubRoundTripper{}
+	model, err := NewHTTP(HTTPConfig{Endpoint: "https://example.com/v1/responses", Model: "gpt-5.4-2026-03-05"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.client == nil || model.client.Timeout == 0 {
+		t.Fatal("default client missing or Timeout is 0 after DefaultTransport swap")
+	}
+	t.Logf("swapped-transport client Timeout=%s", model.client.Timeout)
+}
+
 func TestClassificationMappingCannotProduceContradictoryVerdict(t *testing.T) {
 	for _, classification := range classificationNames {
 		verdict, err := verdictForClassification(modelVerdict{Classification: classification, Explanation: "Bounded explanation."})
