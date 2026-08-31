@@ -41,7 +41,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.x"
+          # Go 1.26 keeps release binaries compatible with macOS 12.
+          go-version: "1.26.x"
           cache: true
       - name: Build archive and SBOM
         env:
