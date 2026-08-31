@@ -41,7 +41,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.x"
+          # Go 1.26 keeps release binaries compatible with macOS 12.
+          go-version: "1.26.x"
           cache: true
       - name: Build archive and SBOM
         env:
@@ -57,7 +58,7 @@ jobs:
             -ldflags "-s -w -X github.com/openclaw/turnwire/internal/buildinfo.Version=${version} -X github.com/openclaw/turnwire/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/openclaw/turnwire/internal/buildinfo.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o "dist/${package}/turnwire" ./cmd/turnwire
           cp README.md LICENSE "dist/${package}/"
-          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 \
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0 \
             mod -json -output "dist/${package}/turnwire.cdx.json"
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"
           rm -rf "dist/${package}"
