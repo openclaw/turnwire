@@ -2,6 +2,7 @@
 
 ## 0.1.3 - Unreleased
 
+- Preserve explicit empty and false guard settings during config rewrites, including peer updates, so saved settings do not revert to defaults or invalidate GPT-5.5 configurations.
 - Bound default OpenAI guard requests while honoring configured call timeouts, and avoid a panic when DefaultTransport is not *http.Transport, thanks @SebTardif.
 
 ## 0.1.2 - 2026-08-02

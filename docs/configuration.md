@@ -51,7 +51,9 @@ Global `--config PATH` and `--data-dir PATH` overrides precede the command.
 }
 ```
 
-Unknown fields rejected.
+Unknown fields rejected. Omitted fields use their defaults. Explicit empty
+strings and `false` guard settings are preserved when CLI commands rewrite the
+configuration, including peer updates.
 
 ## Identity and peers
 
@@ -112,13 +114,16 @@ evidence, HTTP failure, missing credentials, cancellation, and timeout produce
 no envelope. Deterministic secret rules can deny before the API call.
 
 Default: pinned GPT-5.4 with `in_memory` cache retention. Current OpenAI
-requirements reject `in_memory` for GPT-5.5; use `24h` or omit it. Init selects
+requirements reject `in_memory` for GPT-5.5; use `24h` or set
+`prompt_cache_retention` to `""` to omit it from guard requests. Leaving the
+configuration field out uses the `in_memory` default. Init selects
 `24h` for GPT-5.5. Prefer GPT-5.4 in a dedicated Zero Data Retention project
 when lower cache retention matters. Only `gpt-5.4-2026-03-05` and
 `gpt-5.5-2026-04-23` are accepted; floating aliases are rejected.
 
 `api_key_env` names an existing environment variable. Its value is never
-written or logged. `policy` enters every verdict; increment `policy_version`
+written or logged. Set it to `""` for a loopback test guard that needs no
+authentication. `policy` enters every verdict; increment `policy_version`
 whenever its meaning changes. Callers cannot select model or policy.
 
 ## Local approval

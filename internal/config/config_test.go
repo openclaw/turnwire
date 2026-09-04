@@ -117,3 +117,42 @@ func TestWriteLoadRoundTrip(t *testing.T) {
 		t.Fatalf("loaded = %#v", loaded)
 	}
 }
+
+func TestWriteLoadPreservesExplicitGuardSettings(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*GuardConfig)
+	}{
+		{"empty API key environment", func(guard *GuardConfig) {
+			guard.APIKeyEnv = ""
+		}},
+		{"disabled remote access", func(guard *GuardConfig) {
+			guard.Endpoint = "http://127.0.0.1:8080/v1/responses"
+			guard.AllowRemote = false
+		}},
+		{"empty cache retention", func(guard *GuardConfig) {
+			guard.PromptCacheRetention = ""
+		}},
+		{"GPT-5.5 empty cache retention", func(guard *GuardConfig) {
+			guard.Model = "gpt-5.5-2026-04-23"
+			guard.PromptCacheRetention = ""
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			test.mutate(&cfg.Guard)
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := Write(path, cfg, false); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Guard != cfg.Guard {
+				t.Fatalf("guard settings changed after saving: got %#v, want %#v", loaded.Guard, cfg.Guard)
+			}
+		})
+	}
+}
