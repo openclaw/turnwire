@@ -67,15 +67,16 @@ type PeerConfig struct {
 }
 
 // GuardConfig configures the mandatory OpenAI Responses policy classifier.
+// Explicit empty and false values must be encoded because Load overlays defaults.
 type GuardConfig struct {
 	API                  string `json:"api"`
 	Endpoint             string `json:"endpoint"`
 	Model                string `json:"model"`
-	APIKeyEnv            string `json:"api_key_env,omitempty"`
-	AllowRemote          bool   `json:"allow_remote,omitempty"`
+	APIKeyEnv            string `json:"api_key_env"`
+	AllowRemote          bool   `json:"allow_remote"`
 	PolicyVersion        string `json:"policy_version"`
 	Policy               string `json:"policy"`
-	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
+	PromptCacheRetention string `json:"prompt_cache_retention"`
 }
 
 // LimitsConfig bounds message size, request duration, and concurrent work.
