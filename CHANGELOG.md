@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3 - Unreleased
+## 0.1.3 - 2026-09-11
 
 **Highlights:** Reliable guard configuration across peer updates and bounded guard requests.
 
