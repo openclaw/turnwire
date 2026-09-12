@@ -2,8 +2,11 @@
 
 ## 0.1.3 - Unreleased
 
+**Highlights:** Reliable guard configuration across peer updates and bounded guard requests.
+
 - Preserve explicit empty and false guard settings during config rewrites, including peer updates, so saved settings do not revert to defaults or invalidate GPT-5.5 configurations.
 - Bound default OpenAI guard requests while honoring configured call timeouts, and avoid a panic when DefaultTransport is not *http.Transport, thanks @SebTardif.
+- Refresh Go tooling, SBOM generation, and release attestations; test Go 1.25, 1.26, and 1.27 while retaining Go 1.25 source support and macOS 12 release compatibility.
 
 ## 0.1.2 - 2026-08-02
 
