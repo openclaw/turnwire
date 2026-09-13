@@ -258,11 +258,11 @@ Flags:
   --deployment-id ID            Tunnel or custom-app deployment identity
   --endpoint URL                OpenAI Responses endpoint
   --model NAME                  Guard model (default pinned GPT-5.4 snapshot)
-  --api-key-env NAME            API key environment variable
+  --api-key-env NAME            API key environment variable; empty disables lookup
   --policy TEXT                 Operator channel policy
   --policy-version VERSION      Audited policy version
-  --prompt-cache-retention MODE in_memory or 24h
-  --allow-remote                Permit a remote HTTPS endpoint
+  --prompt-cache-retention MODE in_memory, 24h, or empty to omit
+  --allow-remote[=BOOL]         Permit remote HTTPS (default true)
 `
 
 const serveHelp = `Usage:

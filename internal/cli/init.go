@@ -14,19 +14,19 @@ import (
 )
 
 func runInit(args []string, opts options, stdout io.Writer) error {
+	cfg := config.Default()
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
-	var force, allowRemote bool
-	var identityName, deploymentID, endpoint, model, apiKeyEnv, policy, policyVersion, cacheRetention string
+	var force bool
 	flags.BoolVar(&force, "force", false, "replace an existing configuration")
-	flags.StringVar(&identityName, "identity", "local", "endpoint identity name")
-	flags.StringVar(&deploymentID, "deployment-id", "", "tunnel or app deployment identity")
-	flags.StringVar(&endpoint, "endpoint", "", "OpenAI Responses endpoint")
-	flags.StringVar(&model, "model", "", "guard model")
-	flags.StringVar(&apiKeyEnv, "api-key-env", "", "API key environment variable")
-	flags.StringVar(&policy, "policy", "", "channel policy")
-	flags.StringVar(&policyVersion, "policy-version", "", "policy version")
-	flags.StringVar(&cacheRetention, "prompt-cache-retention", "", "in_memory or 24h")
-	flags.BoolVar(&allowRemote, "allow-remote", false, "permit a remote HTTPS endpoint")
+	flags.StringVar(&cfg.Identity.Name, "identity", cfg.Identity.Name, "endpoint identity name")
+	flags.StringVar(&cfg.Deployment.ID, "deployment-id", cfg.Deployment.ID, "tunnel or app deployment identity")
+	flags.StringVar(&cfg.Guard.Endpoint, "endpoint", cfg.Guard.Endpoint, "OpenAI Responses endpoint")
+	flags.StringVar(&cfg.Guard.Model, "model", cfg.Guard.Model, "guard model")
+	flags.StringVar(&cfg.Guard.APIKeyEnv, "api-key-env", cfg.Guard.APIKeyEnv, "API key environment variable")
+	flags.StringVar(&cfg.Guard.Policy, "policy", cfg.Guard.Policy, "channel policy")
+	flags.StringVar(&cfg.Guard.PolicyVersion, "policy-version", cfg.Guard.PolicyVersion, "policy version")
+	flags.StringVar(&cfg.Guard.PromptCacheRetention, "prompt-cache-retention", cfg.Guard.PromptCacheRetention, "in_memory, 24h, or empty")
+	flags.BoolVar(&cfg.Guard.AllowRemote, "allow-remote", cfg.Guard.AllowRemote, "permit a remote HTTPS endpoint")
 	rest, help, err := parseFlags(flags, args, stdout, initHelp)
 	if err != nil || help {
 		return err
@@ -35,35 +35,13 @@ func runInit(args []string, opts options, stdout io.Writer) error {
 		return err
 	}
 
-	cfg := config.Default()
-	cfg.Identity.Name = identityName
-	cfg.Deployment.ID = identityName
-	if deploymentID != "" {
-		cfg.Deployment.ID = deploymentID
+	specified := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { specified[f.Name] = true })
+	if !specified["deployment-id"] {
+		cfg.Deployment.ID = cfg.Identity.Name
 	}
-	if endpoint != "" {
-		cfg.Guard.Endpoint = endpoint
-	}
-	if model != "" {
-		cfg.Guard.Model = model
-		if model == "gpt-5.5-2026-04-23" && cacheRetention == "" {
-			cfg.Guard.PromptCacheRetention = "24h"
-		}
-	}
-	if apiKeyEnv != "" {
-		cfg.Guard.APIKeyEnv = apiKeyEnv
-	}
-	if policy != "" {
-		cfg.Guard.Policy = policy
-	}
-	if policyVersion != "" {
-		cfg.Guard.PolicyVersion = policyVersion
-	}
-	if cacheRetention != "" {
-		cfg.Guard.PromptCacheRetention = cacheRetention
-	}
-	if allowRemote {
-		cfg.Guard.AllowRemote = true
+	if cfg.Guard.Model == "gpt-5.5-2026-04-23" && !specified["prompt-cache-retention"] {
+		cfg.Guard.PromptCacheRetention = "24h"
 	}
 
 	configPath := opts.configPath

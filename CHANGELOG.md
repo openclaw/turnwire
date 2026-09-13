@@ -4,6 +4,7 @@
 
 - Recover accepted inboxes after local identity rotation and refresh delivery receipts with the current key while preserving their original acceptance proof.
 - Reject malformed local approval records consistently, including trailing JSON, invalid text encoding, and unknown fields on retries.
+- Honor explicit empty and false init flags, including cache retention and remote-access policy, and reject explicitly empty required settings.
 - Preserve complete send and receive results across restarts, including reason codes for approved reviews and older audit logs.
 - Apply the log-show display budget to audit details as well as message text, matching log-list accounting.
 - Compatibility: source builds now require Go 1.26 to use current Go support libraries after Go 1.25 left upstream support; release binaries retain macOS 12 compatibility.

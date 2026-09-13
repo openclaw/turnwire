@@ -22,6 +22,7 @@ class Guard(http.server.BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert request['store'] is False and request['background'] is False
         assert request['tools'] == [] and request['text']['format']['strict'] is True
+        assert 'prompt_cache_retention' not in request
         Guard.calls += 1
         text = json.loads(request['input'])['text']
         classification = 'review_ambiguous' if text.startswith('Review ') else 'allow_coordination'
@@ -41,10 +42,9 @@ class Endpoint:
         self.protocol = protocol
         self.config = root / (name + '.json')
         self.command = [binary, '--config', str(self.config), '--data-dir', str(root / name)]
-        self.cli('init', '--identity', name, '--deployment-id', 'smoke-' + name, '--endpoint', endpoint)
-        config = json.loads(self.config.read_text())
-        config['guard']['api_key_env'] = ''
-        self.config.write_text(json.dumps(config))
+        self.cli('init', '--identity', name, '--deployment-id', 'smoke-' + name,
+                 '--endpoint', endpoint, '--api-key-env=', '--allow-remote=false',
+                 '--prompt-cache-retention=')
         self.key = json.loads(self.cli('identity', 'show', '--json'))['public_key']
         self.process = None
         self.sequence = 0
