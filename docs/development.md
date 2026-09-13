@@ -1,8 +1,12 @@
 # Development
 
-Turnwire uses Go 1.25 or newer. Run `go test -race ./...`, `go vet ./...`, and
+Turnwire uses Go 1.26 or newer. Run `go test -race ./...`, `go vet ./...`, and
 `go build ./cmd/turnwire` before proposing a change. Keep Go source formatted
-with `gofmt`. Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
+with `gofmt`. Run `python3 -I scripts/smoke.py ./turnwire` to exercise the built
+CLI and two MCP endpoints against a synthetic loopback guard without credentials.
+CI runs this proof on macOS and Linux with both supported Go series.
+
+Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
 `OPENAI_API_KEY`; they incur API usage and use fixed synthetic text.
 
 ## Code boundaries

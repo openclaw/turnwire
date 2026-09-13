@@ -8,14 +8,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ["1.25.x", "1.26.x", "1.27.x"]
+        go: ["1.26.x", "1.27.x"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -29,8 +34,10 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - run: go test -race ./...
+      - run: go test -race -timeout 5m ./...
       - run: go vet ./...
       - run: go build -trimpath ./cmd/turnwire
+      - name: Exercise built CLI and MCP endpoints
+        run: python3 -I scripts/smoke.py ./turnwire
       - if: runner.os == 'Linux'
         run: GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/turnwire

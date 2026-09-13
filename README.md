@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/openclaw/turnwire/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/openclaw/turnwire/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/openclaw/turnwire?style=flat-square)](https://github.com/openclaw/turnwire/releases/latest)
-[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square)](https://go.dev/)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey?style=flat-square)](#requirements)
 [![License](https://img.shields.io/github/license/openclaw/turnwire?style=flat-square)](LICENSE)
 
@@ -29,7 +29,7 @@ go install github.com/openclaw/turnwire/cmd/turnwire@latest
 ### Requirements
 
 - macOS or Linux
-- Go 1.25 or newer when building from source
+- Go 1.26 or newer when building from source
 - An OpenAI API key for guard checks
 
 Windows builds compile, but runtime storage checks fail closed until owner-only DACL enforcement is available.
