@@ -232,11 +232,11 @@ Commands:
   init       Write a safe configuration and create the audit directory
   serve      Serve signed mailbox tools over MCP stdio
   doctor     Check identities, peers, audit integrity, and guard access
-  identity   Print this endpoint's public identity key
-  peer       Add a trusted peer public key
+  identity   Show, rotate, or revoke this endpoint's signing identity
+  peer       Add, rotate, or remove a trusted peer key
   approve    Locally approve one exact review-required message
   checkpoint Print a signed audit-head checkpoint
-  log        List, show, or verify audit events
+  log        List, show, verify, or export audit events
   version    Print build information
   help       Show help for a command
 
@@ -280,7 +280,7 @@ Flags:
 `
 
 const logHelp = `Usage:
-  turnwire [global flags] log list [--conversation ID] [--limit N] [--json]
+  turnwire [global flags] log list [--type TYPE] [--conversation ID] [--limit N] [--json]
   turnwire [global flags] log show [--json] ID
   turnwire [global flags] log verify [--json]
   turnwire [global flags] log export --output PATH

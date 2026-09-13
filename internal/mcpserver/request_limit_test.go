@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/openclaw/turnwire/internal/testutil"
 	"io"
 	"math"
 	"reflect"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/openclaw/turnwire/internal/testutil"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )

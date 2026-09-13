@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/openclaw/turnwire/internal/identifier"
+
 	"github.com/openclaw/turnwire/internal/identity"
 )
 
@@ -204,7 +206,7 @@ func normalizeSend(input SendInput, maxBytes int) (SendInput, error) {
 	if !validText(input.Text, maxBytes) {
 		return SendInput{}, fmt.Errorf("%w: text is invalid", ErrInvalidInput)
 	}
-	if !validID(input.Destination) {
+	if !identifier.Valid(input.Destination) {
 		return SendInput{}, fmt.Errorf("%w: destination is invalid", ErrInvalidInput)
 	}
 	if input.RequestID == "" {
@@ -213,12 +215,12 @@ func normalizeSend(input SendInput, maxBytes int) (SendInput, error) {
 		if err != nil {
 			return SendInput{}, err
 		}
-	} else if !validID(input.RequestID) {
+	} else if !identifier.Valid(input.RequestID) {
 		return SendInput{}, fmt.Errorf("%w: request_id is invalid", ErrInvalidInput)
 	}
 	if input.ConversationID == "" {
 		input.ConversationID = input.RequestID
-	} else if !validID(input.ConversationID) {
+	} else if !identifier.Valid(input.ConversationID) {
 		return SendInput{}, fmt.Errorf("%w: conversation_id is invalid", ErrInvalidInput)
 	}
 	return input, nil
@@ -227,24 +229,6 @@ func normalizeSend(input SendInput, maxBytes int) (SendInput, error) {
 func validText(text string, maxBytes int) bool {
 	return maxBytes > 0 && len(text) <= maxBytes && utf8.ValidString(text) &&
 		!strings.ContainsRune(text, '\x00') && strings.TrimSpace(text) != ""
-}
-
-func validID(value string) bool {
-	if len(value) < 1 || len(value) > 64 {
-		return false
-	}
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			continue
-		}
-		switch r {
-		case '.', '_', ':', '-':
-			continue
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 func newID() (string, error) {

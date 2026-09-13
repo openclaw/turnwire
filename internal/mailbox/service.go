@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openclaw/turnwire/internal/identifier"
+
 	"github.com/openclaw/turnwire/internal/approval"
 	"github.com/openclaw/turnwire/internal/audit"
 	"github.com/openclaw/turnwire/internal/budget"
@@ -432,7 +434,7 @@ func (s *Service) Confirm(ctx context.Context, input ConfirmInput) (ConfirmOutpu
 		return ConfirmOutput{}, err
 	}
 	ack := input.Acknowledgement
-	if ack.Version != 1 || !validID(ack.MessageID) || !validID(ack.Source) || ack.Destination != s.signer.Name() ||
+	if ack.Version != 1 || !identifier.Valid(ack.MessageID) || !identifier.Valid(ack.Source) || ack.Destination != s.signer.Name() ||
 		!validSHA256(ack.EnvelopeSHA256) || ack.ReceiverAuditSequence == 0 || !validSHA256(ack.ReceiverAuditHead) {
 		return ConfirmOutput{}, ErrUnauthorized
 	}
@@ -650,7 +652,7 @@ func (s *Service) evaluate(ctx context.Context, messageID, requestID, conversati
 }
 
 func (s *Service) validateEnvelope(envelope Envelope) (string, error) {
-	if envelope.Version != 1 || !validID(envelope.MessageID) || !validID(envelope.RequestID) || !validID(envelope.ConversationID) || !validID(envelope.Source) ||
+	if envelope.Version != 1 || !identifier.Valid(envelope.MessageID) || !identifier.Valid(envelope.RequestID) || !identifier.Valid(envelope.ConversationID) || !identifier.Valid(envelope.Source) ||
 		envelope.Destination != s.signer.Name() || !validText(envelope.Body, s.maxMessageBytes) || envelope.BodySHA256 != hashText(envelope.Body) ||
 		envelope.SourceAuditSequence == 0 || !validSHA256(envelope.SourceAuditHead) || strings.TrimSpace(envelope.PolicyVersion) == "" || len(envelope.PolicyVersion) > 128 ||
 		strings.TrimSpace(envelope.GuardModel) == "" || len(envelope.GuardModel) > 128 || (envelope.GuardDecision != guard.DecisionAllow && envelope.GuardDecision != "review_approved") {
