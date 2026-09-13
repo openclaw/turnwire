@@ -214,9 +214,8 @@ func run(ctx context.Context, channel Channel, version string, stdin io.Reader, 
 		nopWriteCloser{Writer: stdout},
 		callLimit,
 		mailbox.MaxMCPOutputBytes,
-		maxRequestsPerMinute,
+		requestBudget,
 	)
-	stream.requestBudget = requestBudget
 	stream.reportError = transportErrors.Record
 	reader := newTeardownReadCloser(stream)
 	runDone := make(chan struct{})

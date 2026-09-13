@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -801,11 +802,7 @@ func cloneDetails(details map[string]string) map[string]string {
 	if len(details) == 0 {
 		return nil
 	}
-	cloned := make(map[string]string, len(details))
-	for key, value := range details {
-		cloned[key] = value
-	}
-	return cloned
+	return maps.Clone(details)
 }
 
 func readAndVerify(file *os.File, aead cipher.AEAD) ([]Entry, error) {

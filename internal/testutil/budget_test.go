@@ -1,4 +1,4 @@
-package mailbox
+package testutil
 
 import (
 	"testing"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestWindowBudgetExpiresAndHandlesClockRollback(t *testing.T) {
-	budget := newWindowBudget(1, time.Minute)
+	budget := NewWindowBudget(1, time.Minute)
 	now := time.Unix(1000, 0)
 	first, err := budget.Take(now)
 	if err != nil {

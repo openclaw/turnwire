@@ -1,4 +1,5 @@
-package mailbox
+// Package testutil contains fixtures shared by protocol tests.
+package testutil
 
 import (
 	"sync"
@@ -12,7 +13,9 @@ type windowBudget struct {
 	used   []time.Time
 }
 
-func newWindowBudget(limit int, window time.Duration) *windowBudget {
+// NewWindowBudget creates a process-local sliding window for transport tests.
+// Production services use the durable fixed-window budget.Counter.
+func NewWindowBudget(limit int, window time.Duration) *windowBudget {
 	return &windowBudget{limit: limit, window: window, used: make([]time.Time, 0, limit)}
 }
 
