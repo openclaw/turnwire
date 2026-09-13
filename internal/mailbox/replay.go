@@ -17,9 +17,11 @@ type requestRecord struct {
 }
 
 type receivedRecord struct {
-	envelopeHash string
-	receivedAt   string
-	output       ReceiveOutput
+	envelopeHash       string
+	receivedAt         string
+	acceptanceSequence uint64
+	acceptanceHead     string
+	output             ReceiveOutput
 }
 
 func (s *Service) request(requestID string) requestRecord {
@@ -34,6 +36,10 @@ func (s *Service) setRequest(requestID string, record requestRecord) {
 }
 
 func (s *Service) rebuildIndex() error {
+	localKeys, err := s.localSigningKeys()
+	if err != nil {
+		return err
+	}
 	// Older final events omit the reason; recover it from the same guard
 	// precedence used by the live evaluation path.
 	type decisionState struct{ decision, reason string }
@@ -77,7 +83,7 @@ func (s *Service) rebuildIndex() error {
 			s.requests[key] = record
 		case eventInboundAccepted:
 			output := ReceiveOutput{Status: "accepted", MessageID: messageID, Decision: entry.Details["decision"], ReasonCode: reason, AuditSequence: entry.Seq, AuditHead: entry.EntryHash}
-			s.received[messageID] = receivedRecord{envelopeHash: entry.Details["envelope_sha256"], receivedAt: entry.Timestamp, output: output}
+			s.received[messageID] = receivedRecord{envelopeHash: entry.Details["envelope_sha256"], receivedAt: entry.Timestamp, acceptanceSequence: entry.Seq, acceptanceHead: entry.EntryHash, output: output}
 			s.inbox = append(s.inbox, Message{MessageID: messageID, ConversationID: entry.ConversationID, Source: entry.Details["source"], Destination: entry.Details["destination"], Body: entry.Text, BodySHA256: entry.TextSHA256, ReceivedAt: entry.Timestamp, AuditSequence: entry.Seq})
 		case eventAcknowledgementIssued:
 			received, ok := s.received[messageID]
@@ -88,13 +94,16 @@ func (s *Service) rebuildIndex() error {
 			if err := json.Unmarshal([]byte(entry.Details["acknowledgement"]), &ack); err != nil {
 				return err
 			}
-			if ack.MessageID != messageID || ack.Source != s.signer.Name() || ack.Destination != entry.Details["source"] ||
+			if ack.Version != 1 || ack.MessageID != messageID || ack.Source != s.signer.Name() || ack.Destination != entry.Details["source"] ||
 				ack.EnvelopeSHA256 != received.envelopeHash || ack.ReceivedAt != received.receivedAt ||
-				ack.ReceiverAuditSequence != received.output.AuditSequence || ack.ReceiverAuditHead != received.output.AuditHead ||
-				verifyAcknowledgement(s.signer.PublicKey(), ack) != nil {
+				ack.ReceiverAuditSequence != received.acceptanceSequence || ack.ReceiverAuditHead != received.acceptanceHead ||
+				!verifyHistoricalAcknowledgement(localKeys, ack) {
 				return errors.New("stored acknowledgement does not match inbound acceptance")
 			}
-			received.output.Acknowledgement = &ack
+			received.output.Acknowledgement = nil
+			if verifyAcknowledgement(s.signer.PublicKey(), ack) == nil {
+				received.output.Acknowledgement = &ack
+			}
 			received.output.AuditSequence, received.output.AuditHead = entry.Seq, entry.EntryHash
 			s.received[messageID] = received
 		case eventInboundVerified:

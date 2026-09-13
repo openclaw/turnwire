@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover accepted inboxes after local identity rotation and refresh delivery receipts with the current key while preserving their original acceptance proof.
+
 - Preserve complete send and receive results across restarts, including reason codes for approved reviews and older audit logs.
 
 - Compatibility: source builds now require Go 1.26 to use current Go support libraries after Go 1.25 left upstream support; release binaries retain macOS 12 compatibility.
