@@ -154,7 +154,29 @@ for protocol in ('2025-11-25', '2026-07-28'):
             finally:
                 work.stop()
                 personal.stop()
+            try:
+                for generation in range(2):
+                    certificate = root / ('rotation-' + str(generation) + '.json')
+                    personal.cli('identity', 'rotate', '--force', '--output', str(certificate))
+                    work.cli('peer', 'rotate', 'personal', str(certificate))
+                    work.start()
+                    personal.start()
+                    refreshed = personal.tool('receive_message', {'envelope': sent['envelope']})
+                    original_ack = received['acknowledgement']
+                    current_ack = refreshed['acknowledgement']
+                    assert current_ack['signature'] != original_ack['signature']
+                    for field in ('receiver_audit_sequence', 'receiver_audit_head', 'received_at'):
+                        assert current_ack[field] == original_ack[field], field
+                    assert work.tool('confirm_delivery', {'acknowledgement': current_ack}) == confirmed
+                    assert len(personal.tool('list_messages', {})['messages']) == 1
+                    work.stop()
+                    personal.stop()
+                personal.start()
+                assert personal.tool('receive_message', {'envelope': sent['envelope']}) == refreshed
+            finally:
+                work.stop()
+                personal.stop()
                 server.shutdown()
                 thread.join(timeout=5)
             assert Guard.calls == 4, Guard.calls
-    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit and redacted export; four loopback guard calls.')
+    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export and two identity rotations; four loopback guard calls.')

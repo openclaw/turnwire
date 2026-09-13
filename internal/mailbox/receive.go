@@ -109,7 +109,7 @@ func (s *Service) Receive(ctx context.Context, input ReceiveInput) (ReceiveOutpu
 	base.Status, base.Decision = "accepted", decision
 	base.AuditSequence, base.AuditHead = accepted.Seq, accepted.EntryHash
 	message := Message{MessageID: envelope.MessageID, ConversationID: envelope.ConversationID, Source: envelope.Source, Destination: envelope.Destination, Body: envelope.Body, BodySHA256: envelope.BodySHA256, ReceivedAt: accepted.Timestamp, AuditSequence: accepted.Seq}
-	received := receivedRecord{envelopeHash: envelopeHash, receivedAt: accepted.Timestamp, output: base}
+	received := receivedRecord{envelopeHash: envelopeHash, receivedAt: accepted.Timestamp, acceptanceSequence: accepted.Seq, acceptanceHead: accepted.EntryHash, output: base}
 	s.mu.Lock()
 	s.received[envelope.MessageID] = received
 	s.inbox = append(s.inbox, message)
@@ -121,7 +121,7 @@ func (s *Service) issueAcknowledgement(envelope Envelope, received receivedRecor
 	ack := Acknowledgement{
 		Version: 1, MessageID: envelope.MessageID, Source: s.signer.Name(), Destination: envelope.Source,
 		EnvelopeSHA256: received.envelopeHash, ReceivedAt: received.receivedAt,
-		ReceiverAuditSequence: received.output.AuditSequence, ReceiverAuditHead: received.output.AuditHead,
+		ReceiverAuditSequence: received.acceptanceSequence, ReceiverAuditHead: received.acceptanceHead,
 	}
 	if err := signAcknowledgement(s.signer, &ack); err != nil {
 		return ReceiveOutput{}, err
@@ -141,7 +141,8 @@ func (s *Service) issueAcknowledgement(envelope Envelope, received receivedRecor
 	output.Acknowledgement = &ack
 	output.AuditSequence, output.AuditHead = issued.Seq, issued.EntryHash
 	s.mu.Lock()
-	s.received[envelope.MessageID] = receivedRecord{envelopeHash: received.envelopeHash, receivedAt: received.receivedAt, output: output}
+	received.output = output
+	s.received[envelope.MessageID] = received
 	s.mu.Unlock()
 	return output, nil
 }

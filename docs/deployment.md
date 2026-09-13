@@ -83,7 +83,13 @@ turnwire checkpoint > post-rotation-checkpoint.json
 ```
 
 The transition is signed by both old and new keys. Do not resume the tunnel
-until every expected peer has updated its pin.
+until every expected peer has updated its pin. Previously accepted inbox
+messages survive local rotation. Retrying their receipt signs the original
+acceptance checkpoint with the current key; older local receipts are verified
+through the saved signed transitions.
+
+Peer authentication still accepts only the currently pinned peer key. Complete
+outstanding outbound transfers before rotating their source identity.
 
 ## Kill switch
 
