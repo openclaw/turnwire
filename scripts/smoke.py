@@ -23,9 +23,11 @@ class Guard(http.server.BaseHTTPRequestHandler):
         assert request['store'] is False and request['background'] is False
         assert request['tools'] == [] and request['text']['format']['strict'] is True
         Guard.calls += 1
+        text = json.loads(request['input'])['text']
+        classification = 'review_ambiguous' if text.startswith('Review ') else 'allow_coordination'
         body = json.dumps({'id': 'resp-smoke', 'model': request['model'], 'status': 'completed',
             'output': [{'type': 'message', 'role': 'assistant', 'content': [
-                {'type': 'output_text', 'text': json.dumps({'classification': 'allow_coordination', 'explanation': 'Synthetic scheduling note.'})}]}]}).encode()
+                {'type': 'output_text', 'text': json.dumps({'classification': classification, 'explanation': 'Synthetic scheduling note.'})}]}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('x-request-id', 'req-smoke')
@@ -173,10 +175,31 @@ for protocol in ('2025-11-25', '2026-07-28'):
                     personal.stop()
                 personal.start()
                 assert personal.tool('receive_message', {'envelope': sent['envelope']}) == refreshed
+                work.start()
+                review_args = {'destination': 'personal', 'text': 'Review a scheduling note.', 'request_id': 'approval-proof'}
+                pending = work.tool('send_message', review_args)
+                assert pending['status'] == 'review_required'
+                work.stop()
+                approvals = root / 'work' / 'audit' / 'approvals'
+                pending_path = approvals / (pending['message_id'] + '.pending.json')
+                original = pending_path.read_bytes()
+                pending_path.write_bytes(original + b'\n{}')
+                rejected = subprocess.run(
+                    work.command + ['approve', '--yes', pending['message_id']],
+                    text=True, capture_output=True, timeout=30,
+                )
+                assert rejected.returncode != 0
+                assert not (approvals / (pending['message_id'] + '.approved.json')).exists()
+                pending_path.write_bytes(original)
+                work.cli('approve', '--yes', pending['message_id'])
+                work.start()
+                approved = work.tool('send_message', review_args)
+                assert approved['status'] == 'released'
+                assert approved['envelope']['guard_decision'] == 'review_approved'
             finally:
                 work.stop()
                 personal.stop()
                 server.shutdown()
                 thread.join(timeout=5)
-            assert Guard.calls == 4, Guard.calls
-    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export and two identity rotations; four loopback guard calls.')
+            assert Guard.calls == 6, Guard.calls
+    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export and two identity rotations and strict local approval; six loopback guard calls.')

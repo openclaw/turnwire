@@ -134,7 +134,8 @@ body, then requires local confirmation. Approval binds to the exact SHA-256
 body. MCP has no approval tool.
 
 Retrying reruns deterministic and model guards. Approval can override only
-`review`, never `deny` or a guard failure.
+`review`, never `deny` or a guard failure. Malformed approval records fail closed,
+including extra JSON values, invalid text encoding, and unknown fields.
 
 ## Limits
 

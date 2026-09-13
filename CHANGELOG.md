@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject malformed local approval records consistently, including trailing JSON, invalid text encoding, and unknown fields on retries.
+
 - Recover accepted inboxes after local identity rotation and refresh delivery receipts with the current key while preserving their original acceptance proof.
 
 - Preserve complete send and receive results across restarts, including reason codes for approved reviews and older audit logs.
