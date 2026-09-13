@@ -66,10 +66,7 @@ func (s *Service) evaluate(ctx context.Context, messageID, requestID, conversati
 	if err != nil {
 		return "", "", guard.Evaluation{}, audit.Entry{}, err
 	}
-	decision, reason := evaluation.Decision, evaluation.ReasonCode
-	if deterministicDecision == guard.DecisionReview && decision == guard.DecisionAllow {
-		decision, reason = guard.DecisionReview, deterministicReason
-	}
+	decision, reason := effectiveDecision(deterministicDecision, deterministicReason, evaluation.Decision, evaluation.ReasonCode)
 	return decision, reason, evaluation, entry, nil
 }
 
@@ -91,4 +88,11 @@ func guardErrorCode(err error) string {
 		return "missing_api_key"
 	}
 	return "provider_error"
+}
+
+func effectiveDecision(deterministicDecision, deterministicReason, modelDecision, modelReason string) (string, string) {
+	if deterministicDecision == guard.DecisionReview && modelDecision == guard.DecisionAllow {
+		return guard.DecisionReview, deterministicReason
+	}
+	return modelDecision, modelReason
 }
