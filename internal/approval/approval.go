@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/openclaw/turnwire/internal/securestore"
+	"github.com/openclaw/turnwire/internal/strictjson"
 )
 
 // Pending is the exact message awaiting local review.
@@ -90,9 +92,7 @@ func (s *Store) SavePending(pending Pending) error {
 		return fmt.Errorf("read pending approval replay: %w", readErr)
 	}
 	var prior Pending
-	decoder := json.NewDecoder(bytes.NewReader(existing))
-	decoder.DisallowUnknownFields()
-	if decodeErr := decoder.Decode(&prior); decodeErr != nil {
+	if decodeErr := decodeRecord(existing, &prior); decodeErr != nil {
 		return fmt.Errorf("decode pending approval replay: %w", decodeErr)
 	}
 	if prior.Binding() != pending.Binding() || prior.Body != pending.Body {
@@ -108,9 +108,7 @@ func (s *Store) Pending(messageID string) (Pending, error) {
 		return Pending{}, err
 	}
 	var pending Pending
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&pending); err != nil {
+	if err := decodeRecord(data, &pending); err != nil {
 		return Pending{}, fmt.Errorf("decode pending approval: %w", err)
 	}
 	return pending, nil
@@ -133,7 +131,7 @@ func (s *Store) Approve(binding Binding, now time.Time) error {
 			return fmt.Errorf("read existing approval: %w", readErr)
 		}
 		var prior approved
-		if decodeErr := json.Unmarshal(existing, &prior); decodeErr != nil {
+		if decodeErr := decodeRecord(existing, &prior); decodeErr != nil {
 			return fmt.Errorf("decode existing approval: %w", decodeErr)
 		}
 		if prior.Binding == binding {
@@ -157,10 +155,31 @@ func (s *Store) IsApproved(binding Binding) (bool, error) {
 		return false, err
 	}
 	var record approved
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&record); err != nil {
+	if err := decodeRecord(data, &record); err != nil {
 		return false, fmt.Errorf("decode approval: %w", err)
 	}
 	return record.Binding == binding, nil
+}
+
+func decodeRecord(data []byte, record any) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("approval record must be a JSON object")
+	}
+	if err := strictjson.ValidateText(data); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(record); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values in approval record")
+		}
+		return fmt.Errorf("trailing approval data: %w", err)
+	}
+	return nil
 }
