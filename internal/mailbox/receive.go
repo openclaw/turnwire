@@ -7,10 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openclaw/turnwire/internal/identifier"
-
 	"github.com/openclaw/turnwire/internal/approval"
 	"github.com/openclaw/turnwire/internal/guard"
+	"github.com/openclaw/turnwire/internal/identifier"
 )
 
 func (s *Service) Receive(ctx context.Context, input ReceiveInput) (ReceiveOutput, error) {
@@ -102,6 +101,7 @@ func (s *Service) Receive(ctx context.Context, input ReceiveInput) (ReceiveOutpu
 	details := messageDetails("inbound", envelope.Source, envelope.Destination, envelope.MessageID)
 	details["envelope_sha256"] = envelopeHash
 	details["decision"] = decision
+	details["reason_code"] = reason
 	accepted, err := s.appendEvent(envelope.MessageID, envelope.RequestID, envelope.ConversationID, eventInboundAccepted, "accepted", "", envelope.Body, details)
 	if err != nil {
 		return ReceiveOutput{}, err

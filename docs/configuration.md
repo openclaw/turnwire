@@ -157,6 +157,10 @@ Empty/invalid text, NUL, expired or future records, wrong destinations, unknown
 peers, bad signatures, body-hash mismatches, replay conflicts, and over-limit
 data fail closed.
 
+Committed send and receive results retain their original `reason_code` across
+restarts, including locally approved reviews. Returning a cached result does
+not rerun the model guard.
+
 ## Storage
 
 Config, state, identity keys, approvals, budget counters, `audit.key`, and

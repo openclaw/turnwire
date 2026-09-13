@@ -111,7 +111,9 @@ func (s *Service) Send(ctx context.Context, input SendInput) (SendOutput, error)
 	if err != nil {
 		return SendOutput{}, err
 	}
-	released, err := s.appendEvent(messageID, input.RequestID, input.ConversationID, eventOutboundReleased, "released", "", string(envelopeJSON), messageDetails("outbound", s.signer.Name(), input.Destination, messageID))
+	details := messageDetails("outbound", s.signer.Name(), input.Destination, messageID)
+	details["reason_code"] = reason
+	released, err := s.appendEvent(messageID, input.RequestID, input.ConversationID, eventOutboundReleased, "released", "", string(envelopeJSON), details)
 	if err != nil {
 		return SendOutput{}, err
 	}

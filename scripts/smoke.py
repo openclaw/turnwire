@@ -131,8 +131,8 @@ for protocol in ('2025-11-25', '2026-07-28'):
                 inbox = personal.tool('list_messages', {})
                 assert len(inbox['messages']) == 1 and inbox['messages'][0]['body'] == send_args['text']
                 assert work.tool('audit_checkpoint', {})['signature']
-                assert work.tool('send_message', send_args)['envelope'] == sent['envelope']
-                assert personal.tool('receive_message', {'envelope': sent['envelope']})['acknowledgement'] == received['acknowledgement']
+                assert work.tool('send_message', send_args) == sent
+                assert personal.tool('receive_message', {'envelope': sent['envelope']}) == received
                 assert work.tool('confirm_delivery', {'acknowledgement': received['acknowledgement']}) == confirmed
             finally:
                 work.stop()
@@ -147,8 +147,8 @@ for protocol in ('2025-11-25', '2026-07-28'):
             try:
                 work.start()
                 personal.start()
-                assert work.tool('send_message', send_args)['envelope'] == sent['envelope']
-                assert personal.tool('receive_message', {'envelope': sent['envelope']})['acknowledgement'] == received['acknowledgement']
+                assert work.tool('send_message', send_args) == sent
+                assert personal.tool('receive_message', {'envelope': sent['envelope']}) == received
                 assert work.tool('confirm_delivery', {'acknowledgement': received['acknowledgement']}) == confirmed
                 assert len(personal.tool('list_messages', {})['messages']) == 1
             finally:

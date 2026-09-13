@@ -34,9 +34,25 @@ func (s *Service) setRequest(requestID string, record requestRecord) {
 }
 
 func (s *Service) rebuildIndex() error {
+	// Older final events omit the reason; recover it from the same guard
+	// precedence used by the live evaluation path.
+	type decisionState struct{ decision, reason string }
+	decisions := make(map[string]decisionState)
 	return s.audit.Scan(func(entry audit.Entry) error {
 		messageID := entry.Details["message_id"]
+		scope := entry.Details["direction"] + ":" + messageID
+		reason := entry.Details["reason_code"]
+		if reason == "" {
+			reason = decisions[scope].reason
+		}
 		switch entry.Type {
+		case eventDeterministicGuard:
+			decisions[scope] = decisionState{entry.Details["decision"], entry.Details["reason_code"]}
+		case eventModelGuard:
+			prior := decisions[scope]
+			decision, reason := effectiveDecision(prior.decision, prior.reason, entry.Details["decision"], entry.Details["reason_code"])
+			decisions[scope] = decisionState{decision, reason}
+
 		case eventMessageSubmitted:
 			binding := hashText(entry.Details["destination"] + "\x00" + entry.ConversationID + "\x00" + entry.Text)
 			s.requests[sendClaimKey(entry.RequestID)] = requestRecord{hash: binding, messageID: messageID, createdAt: entry.Timestamp, bodyHash: entry.TextSHA256}
@@ -57,10 +73,10 @@ func (s *Service) rebuildIndex() error {
 			key := sendClaimKey(entry.RequestID)
 			record := s.requests[key]
 			record.final = true
-			record.output = SendOutput{Status: "released", MessageID: envelope.MessageID, RequestID: envelope.RequestID, BodySHA256: envelope.BodySHA256, Decision: envelope.GuardDecision, Envelope: &envelope, AuditSequence: entry.Seq, AuditHead: entry.EntryHash}
+			record.output = SendOutput{Status: "released", MessageID: envelope.MessageID, RequestID: envelope.RequestID, BodySHA256: envelope.BodySHA256, Decision: envelope.GuardDecision, ReasonCode: reason, Envelope: &envelope, AuditSequence: entry.Seq, AuditHead: entry.EntryHash}
 			s.requests[key] = record
 		case eventInboundAccepted:
-			output := ReceiveOutput{Status: "accepted", MessageID: messageID, Decision: entry.Details["decision"], AuditSequence: entry.Seq, AuditHead: entry.EntryHash}
+			output := ReceiveOutput{Status: "accepted", MessageID: messageID, Decision: entry.Details["decision"], ReasonCode: reason, AuditSequence: entry.Seq, AuditHead: entry.EntryHash}
 			s.received[messageID] = receivedRecord{envelopeHash: entry.Details["envelope_sha256"], receivedAt: entry.Timestamp, output: output}
 			s.inbox = append(s.inbox, Message{MessageID: messageID, ConversationID: entry.ConversationID, Source: entry.Details["source"], Destination: entry.Details["destination"], Body: entry.Text, BodySHA256: entry.TextSHA256, ReceivedAt: entry.Timestamp, AuditSequence: entry.Seq})
 		case eventAcknowledgementIssued:
