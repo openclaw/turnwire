@@ -11,6 +11,9 @@ Default locations:
 - Linux state: `${XDG_STATE_HOME:-~/.local/state}/turnwire/`
 
 Global `--config PATH` and `--data-dir PATH` overrides precede the command.
+`init` applies defaults only when a flag is omitted: explicit
+`--api-key-env=''`, `--prompt-cache-retention=''`, and `--allow-remote=false`
+are preserved. Explicit empty values for required settings are rejected.
 
 ## Complete shape
 
@@ -117,7 +120,7 @@ Default: pinned GPT-5.4 with `in_memory` cache retention. Current OpenAI
 requirements reject `in_memory` for GPT-5.5; use `24h` or set
 `prompt_cache_retention` to `""` to omit it from guard requests. Leaving the
 configuration field out uses the `in_memory` default. Init selects
-`24h` for GPT-5.5. Prefer GPT-5.4 in a dedicated Zero Data Retention project
+`24h` for GPT-5.5 when the cache-retention flag is omitted. Prefer GPT-5.4 in a dedicated Zero Data Retention project
 when lower cache retention matters. Only `gpt-5.4-2026-03-05` and
 `gpt-5.5-2026-04-23` are accepted; floating aliases are rejected.
 
