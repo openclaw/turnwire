@@ -56,13 +56,13 @@ type limiter interface {
 	Take(time.Time) (bool, error)
 }
 
-func newRequestLimitedStream(reader *boundedFrameReadCloser, writer io.WriteCloser, maxInFlight, maxOutputBytes, maxRequestsPerMinute int) *requestLimitedStream {
+func newRequestLimitedStream(reader *boundedFrameReadCloser, writer io.WriteCloser, maxInFlight, maxOutputBytes int, requestBudget limiter) *requestLimitedStream {
 	return &requestLimitedStream{
 		reader:         reader,
 		writer:         writer,
 		maxInFlight:    maxInFlight,
 		maxOutputBytes: maxOutputBytes,
-		requestBudget:  newWindowBudget(maxRequestsPerMinute, time.Minute),
+		requestBudget:  requestBudget,
 		pending:        make(map[jsonrpc.ID]struct{}),
 	}
 }

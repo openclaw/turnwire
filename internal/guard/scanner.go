@@ -30,7 +30,6 @@ var deterministicRules = []struct {
 // never matched content.
 func Scan(text string) []Finding {
 	findings := make([]Finding, 0, 2)
-	seen := make(map[string]struct{})
 	for _, rule := range deterministicRules {
 		if !rule.pattern.MatchString(text) {
 			continue
@@ -38,10 +37,6 @@ func Scan(text string) []Finding {
 		if rule.code == "payment_card" && !containsLuhnCandidate(text) {
 			continue
 		}
-		if _, ok := seen[rule.code]; ok {
-			continue
-		}
-		seen[rule.code] = struct{}{}
 		findings = append(findings, Finding{Code: rule.code, Decision: rule.decision})
 	}
 	return findings

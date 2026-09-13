@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -150,7 +151,7 @@ func New(opts Options) (*Service, error) {
 		return nil, fmt.Errorf("open guard budget: %w", err)
 	}
 	service := &Service{
-		audit: opts.Audit, signer: opts.Signer, peers: clonePeers(opts.Peers), guard: opts.Guard,
+		audit: opts.Audit, signer: opts.Signer, peers: maps.Clone(opts.Peers), guard: opts.Guard,
 		approvals: opts.Approvals, policy: opts.Policy, policyVersion: opts.PolicyVersion,
 		deploymentSHA256: opts.DeploymentSHA256,
 		maxMessageBytes:  opts.MaxMessageBytes, timeout: opts.Timeout, maxMessageAge: opts.MaxMessageAge,
@@ -793,13 +794,6 @@ func (s *Service) rebuildIndex() error {
 	})
 }
 
-func clonePeers(peers map[string]string) map[string]string {
-	cloned := make(map[string]string, len(peers))
-	for k, v := range peers {
-		cloned[k] = v
-	}
-	return cloned
-}
 func sendClaimKey(requestID string) string { return "send:" + requestID }
 func messageDetails(direction, source, destination, messageID string) map[string]string {
 	return map[string]string{"direction": direction, "source": source, "destination": destination, "message_id": messageID}

@@ -3,6 +3,7 @@
 package attestation
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 
 	"github.com/openclaw/turnwire/internal/buildinfo"
 	"github.com/openclaw/turnwire/internal/config"
@@ -62,7 +63,7 @@ func Measure(cfg config.Config, publicKey string) (Record, error) {
 	for _, configured := range cfg.Identity.Peers {
 		peers = append(peers, peer{Name: configured.Name, PublicKey: configured.PublicKey})
 	}
-	sort.Slice(peers, func(i, j int) bool { return peers[i].Name < peers[j].Name })
+	slices.SortFunc(peers, func(a, b peer) int { return cmp.Compare(a.Name, b.Name) })
 	peerJSON, err := json.Marshal(peers)
 	if err != nil {
 		return Record{}, err

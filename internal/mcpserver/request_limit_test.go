@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/openclaw/turnwire/internal/testutil"
 	"io"
 	"math"
 	"reflect"
@@ -253,7 +254,7 @@ func TestRequestLimitedStreamBudgetsSchemaInvalidCallsBeforeSDK(t *testing.T) {
 	// consume the transport budget before reaching the SDK.
 	input := callFrame(t, "invalid-1", "tools/call") + callFrame(t, "invalid-2", "tools/call")
 	stream := newStaticLimitedStream(input, &lockedWriteCloser{}, 2)
-	stream.requestBudget = newWindowBudget(1, time.Minute)
+	stream.requestBudget = testutil.NewWindowBudget(1, time.Minute)
 	t.Cleanup(func() { _ = stream.Close() })
 
 	mustReadOneMessage(t, stream)
@@ -268,7 +269,7 @@ func TestRequestLimitedStreamBudgetsMalformedJSONRPCBeforeSDK(t *testing.T) {
 		t.Fatal("test frame unexpectedly decoded as JSON-RPC")
 	}
 	stream := newStaticLimitedStream(frame+frame, &lockedWriteCloser{}, 2)
-	stream.requestBudget = newWindowBudget(1, time.Minute)
+	stream.requestBudget = testutil.NewWindowBudget(1, time.Minute)
 	t.Cleanup(func() { _ = stream.Close() })
 
 	if got, err := readStreamFrame(stream); err != nil || string(got) != frame {
@@ -308,7 +309,7 @@ func TestRequestLimitedStreamRejectsHugeBatchWithoutParsing(t *testing.T) {
 		output,
 		1,
 		testMaxOutputBytes,
-		600,
+		testutil.NewWindowBudget(600, time.Minute),
 	)
 	t.Cleanup(func() { _ = stream.Close() })
 
@@ -328,7 +329,7 @@ func TestRequestLimitedStreamRejectsOversizedOutput(t *testing.T) {
 		output,
 		1,
 		64,
-		600,
+		testutil.NewWindowBudget(600, time.Minute),
 	)
 	if n, err := stream.Write(bytes.Repeat([]byte("x"), 65)); n != 0 || !errors.Is(err, errOutputTooLarge) {
 		t.Fatalf("oversized Write = (%d, %v), want (0, %v)", n, err, errOutputTooLarge)
@@ -608,7 +609,7 @@ func (*errorWriteCloser) Close() error                { return nil }
 const testMaxOutputBytes = 8 << 20
 
 func newLimitedStream(input io.Reader, output io.WriteCloser, limit int) *requestLimitedStream {
-	return newRequestLimitedStream(newBoundedFrameReadCloser(input, 1<<20), output, limit, testMaxOutputBytes, 600)
+	return newRequestLimitedStream(newBoundedFrameReadCloser(input, 1<<20), output, limit, testMaxOutputBytes, testutil.NewWindowBudget(600, time.Minute))
 }
 
 func newStaticLimitedStream(input string, output io.WriteCloser, limit int) *requestLimitedStream {

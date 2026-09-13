@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/openclaw/turnwire/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,7 +190,7 @@ func TestDeterministicSecretBlockSkipsModel(t *testing.T) {
 
 func TestRequestBudgetFailsClosed(t *testing.T) {
 	endpoint := newEndpoint(t, "work", nil, &fakeGuard{})
-	endpoint.service.requestBudget = newWindowBudget(1, time.Minute)
+	endpoint.service.requestBudget = testutil.NewWindowBudget(1, time.Minute)
 	if _, err := endpoint.service.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestRequestBudgetFailsClosed(t *testing.T) {
 func TestGuardCallBudgetFailsClosedAndAudits(t *testing.T) {
 	evaluator := &fakeGuard{verdict: guard.Verdict{Decision: guard.DecisionAllow, ReasonCode: "allowed", DataClasses: []string{"coordination"}, Explanation: "Allowed."}}
 	endpoint := newEndpoint(t, "work", map[string]string{"personal": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, evaluator)
-	endpoint.service.guardBudget = newWindowBudget(1, time.Hour)
+	endpoint.service.guardBudget = testutil.NewWindowBudget(1, time.Hour)
 	if _, err := endpoint.service.Send(context.Background(), SendInput{Destination: "personal", Text: "first routine note", RequestID: "budget-1"}); err != nil {
 		t.Fatal(err)
 	}
