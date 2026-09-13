@@ -22,7 +22,7 @@ const maxLogReadBytes = 16 << 20
 
 func runLog(args []string, opts options, stdout io.Writer) error {
 	if len(args) == 0 {
-		return usageError("usage: turnwire log <list|show|verify>")
+		return usageError("usage: turnwire log <list|show|verify|export>")
 	}
 	switch args[0] {
 	case "list":

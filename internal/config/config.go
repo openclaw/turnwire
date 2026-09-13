@@ -18,6 +18,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/openclaw/turnwire/internal/identifier"
+
 	"github.com/openclaw/turnwire/internal/audit"
 )
 
@@ -249,15 +251,15 @@ func DefaultDataDir() string {
 
 // Validate rejects unsafe endpoints and invalid resource limits.
 func (c Config) Validate() error {
-	if !validName(c.Identity.Name) {
+	if !identifier.Valid(c.Identity.Name) {
 		return errors.New("config.identity.name must use 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen")
 	}
-	if !validName(c.Deployment.ID) {
+	if !identifier.Valid(c.Deployment.ID) {
 		return errors.New("config.deployment.id must use 1-64 ASCII letters, digits, dot, underscore, colon, or hyphen")
 	}
 	seenPeers := make(map[string]struct{}, len(c.Identity.Peers))
 	for _, peer := range c.Identity.Peers {
-		if !validName(peer.Name) || peer.Name == c.Identity.Name {
+		if !identifier.Valid(peer.Name) || peer.Name == c.Identity.Name {
 			return errors.New("config.identity.peers contains an invalid peer name")
 		}
 		if _, exists := seenPeers[peer.Name]; exists {
@@ -392,22 +394,4 @@ func validEnvName(name string) bool {
 		}
 	}
 	return name != ""
-}
-
-func validName(value string) bool {
-	if len(value) < 1 || len(value) > 64 {
-		return false
-	}
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			continue
-		}
-		switch r {
-		case '.', '_', ':', '-':
-			continue
-		default:
-			return false
-		}
-	}
-	return true
 }
