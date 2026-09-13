@@ -303,19 +303,7 @@ func runLogShow(args []string, opts options, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	entries := make([]audit.Entry, 0)
-	bytes := 0
-	err = audit.Scan(dir, func(entry audit.Entry) error {
-		if entry.EventID != id && entry.ExchangeID != id && entry.RequestID != id && entry.Details["message_id"] != id {
-			return nil
-		}
-		bytes += len(entry.Text)
-		if bytes > maxLogReadBytes {
-			return errors.New("selected audit records exceed the 16 MiB display limit")
-		}
-		entries = append(entries, entry)
-		return nil
-	})
+	entries, err := scanLogMatches(dir, id, maxLogReadBytes)
 	if err != nil {
 		return err
 	}
@@ -353,6 +341,26 @@ func runLogShow(args []string, opts options, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func scanLogMatches(dir, id string, maxBytes int) ([]audit.Entry, error) {
+	entries := make([]audit.Entry, 0)
+	retainedBytes := 0
+	err := audit.Scan(dir, func(entry audit.Entry) error {
+		if entry.EventID != id && entry.ExchangeID != id && entry.RequestID != id && entry.Details["message_id"] != id {
+			return nil
+		}
+		retainedBytes += logEntrySize(entry)
+		if retainedBytes > maxBytes {
+			return fmt.Errorf("selected audit records exceed the %d MiB display limit", maxBytes>>20)
+		}
+		entries = append(entries, entry)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func runLogVerify(args []string, opts options, stdout io.Writer) error {

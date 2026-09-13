@@ -58,6 +58,10 @@ turnwire checkpoint > checkpoint.json
 turnwire log export --output audit-metadata-$(date -u +%Y%m%dT%H%M%SZ).jsonl
 ```
 
+Local `log list` and `log show` retain at most 16 MiB of message text and
+audit detail keys/values per selection. Use `log list --limit N` to inspect
+a smaller window when a selection exceeds that budget.
+
 Copy both to append-only/WORM storage controlled by the corresponding domain.
 The export excludes message text and model explanations, includes selected
 reconciliation metadata, and ends with a signed checkpoint. Reconcile the two
