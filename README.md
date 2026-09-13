@@ -117,6 +117,8 @@ go vet ./...
 go build ./cmd/turnwire
 ```
 
+See the [development guide](docs/development.md) for package ownership, compatibility boundaries, and integration proof.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

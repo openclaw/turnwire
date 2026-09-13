@@ -77,6 +77,13 @@ func newEndpoint(t *testing.T, name string, peers map[string]string, evaluator g
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := service.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown fixture: %v", err)
+		}
+	})
 	return endpointFixture{service: service, log: log, approvals: approvals, signer: signer}
 }
 
@@ -380,6 +387,9 @@ func TestRestartIssuesAcknowledgementForCommittedAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Dir(personal.log.Path())
+	if err := personal.service.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if err := personal.approvals.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -405,6 +415,7 @@ func TestRestartIssuesAcknowledgementForCommittedAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = reopened.Shutdown(context.Background()) })
 	received, err := reopened.Receive(context.Background(), ReceiveInput{Envelope: *sent.Envelope})
 	if err != nil {
 		t.Fatal(err)
