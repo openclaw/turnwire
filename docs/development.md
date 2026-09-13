@@ -1,0 +1,44 @@
+# Development
+
+Turnwire uses Go 1.25 or newer. Run `go test -race ./...`, `go vet ./...`, and
+`go build ./cmd/turnwire` before proposing a change. Keep Go source formatted
+with `gofmt`. Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
+`OPENAI_API_KEY`; they incur API usage and use fixed synthetic text.
+
+## Code boundaries
+
+- `cmd/turnwire` owns process signals and exit codes; `internal/cli` routes
+  commands into initialization, serving, doctor, identity, peers, approval,
+  and log operations.
+- `internal/mailbox` owns signed send, receive, confirmation, inbox, and
+  checkpoint operations. `evaluation.go` combines deterministic and model
+  decisions; `replay.go` rebuilds durable message state. `service.go` owns
+  construction, admission, locking, and shutdown.
+- `internal/mcpserver` translates the five mailbox tools into MCP and enforces
+  byte, frame, concurrency, and output limits below SDK dispatch.
+- `internal/guard` owns secret scanning, Responses requests, and the mapping
+  from one model classification to a consistent policy verdict.
+- `internal/audit` owns append durability and handle lifecycle in `audit.go`,
+  encryption and canonical hashes in `entry.go`, verified traversal in
+  `scan.go`, and descriptor-bound path checks in `paths.go`.
+- `internal/owneronly` validates ownership, permissions, ACLs, and path
+  traversal. `internal/securestore` uses those descriptors for bounded state
+  files; `internal/budget` persists admission counters and `internal/approval`
+  stores exact local approval bindings.
+- `internal/config`, `internal/identity`, `internal/attestation`, and
+  `internal/buildinfo` own configuration, signing/key lifecycle, deployment
+  measurements, and embedded build metadata, respectively.
+- `internal/identifier` and `internal/strictjson` define shared identifier and
+  lossless text checks. `internal/testutil` contains test fixtures only.
+
+## Compatibility and proof
+
+Unsigned JSON field order, audit canonicalization, and signed metadata are
+protocol contracts. Preserve them when reorganizing code. Storage checks must
+remain descriptor-relative, and a write/sync failure must never be treated as
+a successful release or receipt.
+
+Test both the live state transition and reconstruction after restart when
+changing mailbox state. Exercise a built CLI through MCP for integration
+proof. Use a literal loopback guard endpoint for synthetic local tests, and
+keep private state and API credentials out of fixtures and proof output.

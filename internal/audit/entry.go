@@ -1,4 +1,3 @@
-// Package audit provides a small append-only, tamper-evident event log.
 package audit
 
 import (
