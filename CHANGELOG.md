@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.4 - 2026-09-13
 
 **Highlights:** Accepted inboxes survive local identity rotation, and send/receive results persist across restarts.
