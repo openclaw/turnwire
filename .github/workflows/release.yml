@@ -41,7 +41,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Go 1.26 keeps release binaries compatible with macOS 12.
+          # Go 1.26 supports macOS 12; cgo also needs an explicit deployment target.
           go-version: "1.26.x"
           cache: true
       - name: Build archive and SBOM
@@ -51,12 +51,18 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
+          if [ "$GOOS" = darwin ]; then
+            source scripts/macos-release-env.sh
+          fi
           version="${GITHUB_REF_NAME#v}"
           package="turnwire_${version}_${GOOS}_${GOARCH}"
           mkdir -p "dist/${package}"
           go build -trimpath \
             -ldflags "-s -w -X github.com/openclaw/turnwire/internal/buildinfo.Version=${version} -X github.com/openclaw/turnwire/internal/buildinfo.Commit=${GITHUB_SHA} -X github.com/openclaw/turnwire/internal/buildinfo.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o "dist/${package}/turnwire" ./cmd/turnwire
+          if [ "$GOOS" = darwin ]; then
+            python3 -I scripts/check_macos_target.py "dist/${package}/turnwire"
+          fi
           cp README.md LICENSE "dist/${package}/"
           go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0 \
             mod -json -output "dist/${package}/turnwire.cdx.json"

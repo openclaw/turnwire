@@ -41,3 +41,25 @@ jobs:
         run: python3 -I scripts/smoke.py ./turnwire
       - if: runner.os == 'Linux'
         run: GOOS=windows GOARCH=amd64 go build -trimpath ./cmd/turnwire
+
+  macos-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Verify macOS release compatibility
+        run: |
+          set -euo pipefail
+          python3 -IB -m unittest discover -s scripts -p 'test_*.py'
+          source scripts/macos-release-env.sh
+          go build -trimpath -ldflags "-s -w" -o turnwire ./cmd/turnwire
+          python3 -I scripts/check_macos_target.py ./turnwire
+          python3 -I scripts/smoke.py ./turnwire

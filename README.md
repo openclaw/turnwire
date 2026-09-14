@@ -28,7 +28,7 @@ go install github.com/openclaw/turnwire/cmd/turnwire@latest
 
 ### Requirements
 
-- macOS or Linux
+- macOS 12 or newer for release binaries, or Linux
 - Go 1.26 or newer when building from source
 - An OpenAI API key for guard checks
 

@@ -9,6 +9,28 @@ CI runs this proof on macOS and Linux with both supported Go series.
 Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
 `OPENAI_API_KEY`; they incur API usage and use fixed synthetic text.
 
+## macOS release builds
+
+macOS release binaries support macOS 12 and newer. Build them with Go 1.26
+and cgo enabled: the owner-only storage checks call Apple's ACL APIs, and
+builds without cgo reject storage operations. Source builds with newer Go
+versions also inherit that Go version's minimum supported OS.
+
+On macOS, use the same compiler/linker settings and artifact gate as CI:
+
+```bash
+source scripts/macos-release-env.sh
+go build -trimpath -ldflags "-s -w" -o turnwire ./cmd/turnwire
+python3 -I scripts/check_macos_target.py ./turnwire
+python3 -I scripts/smoke.py ./turnwire
+```
+
+The environment pins the deployment target for cgo compilation and external
+linking. The gate checks every Mach-O deployment command against macOS 12.0
+and rejects missing targets; an SDK or runner upgrade must not silently raise
+the minimum. CI builds and exercises both release architectures with Go 1.26,
+and the release workflow checks the actual binary before archiving or attesting it.
+
 ## Code boundaries
 
 - `cmd/turnwire` owns process signals and exit codes; `internal/cli` routes
