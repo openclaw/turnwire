@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.5 - 2026-09-13
 
 **Highlights:** Release binaries run on macOS 12–14 again.
