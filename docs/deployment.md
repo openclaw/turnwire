@@ -15,6 +15,10 @@ and both sides agree on checkpoint/export reconciliation.
 
 ## Install and verify
 
+macOS release binaries support macOS 12 and newer. Versions 0.1.0–0.1.4
+accidentally require macOS 15 due to a build deployment-target bug; use 0.1.5
+or newer on macOS 12–14.
+
 Release archives contain the binary, license, and CycloneDX SBOM. Verify before
 installation:
 
