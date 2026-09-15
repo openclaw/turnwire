@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fail closed on conflicting or malformed guard output, including duplicate JSON keys, instead of accepting an allow verdict while ignoring denials, refusals, or unexpected tool calls.
+
 ## 0.1.5 - 2026-09-13
 
 **Highlights:** Release binaries run on macOS 12–14 again.

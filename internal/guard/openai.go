@@ -180,6 +180,9 @@ func (g *HTTP) Evaluate(ctx context.Context, input Input) (Evaluation, error) {
 	if err := strictjson.ValidateText(raw); err != nil {
 		return Evaluation{}, errors.New("guard returned invalid JSON")
 	}
+	if err := strictjson.ValidateUniqueKeys(raw); err != nil {
+		return Evaluation{}, errors.New("guard returned ambiguous or invalid JSON")
+	}
 	var envelope responsesEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Status != "completed" {
 		return Evaluation{}, errors.New("guard response did not complete")
@@ -187,12 +190,15 @@ func (g *HTTP) Evaluate(ctx context.Context, input Input) (Evaluation, error) {
 	if envelope.Model != g.model || envelope.ID == "" || resp.Header.Get("x-request-id") == "" {
 		return Evaluation{}, errors.New("guard response lacks matching provider audit identifiers")
 	}
-	text, err := firstOutputText(envelope.Output)
+	text, err := verdictOutputText(envelope.Output)
 	if err != nil {
-		return Evaluation{}, errors.New("guard returned no verdict")
+		return Evaluation{}, errors.New("guard returned invalid verdict output")
 	}
 	if err := strictjson.ValidateText([]byte(text)); err != nil {
 		return Evaluation{}, errors.New("guard verdict is invalid JSON")
+	}
+	if err := strictjson.ValidateUniqueKeys([]byte(text)); err != nil {
+		return Evaluation{}, errors.New("guard verdict is ambiguous or invalid JSON")
 	}
 	var rawVerdict modelVerdict
 	decoder := json.NewDecoder(strings.NewReader(text))
@@ -316,29 +322,26 @@ func consistentVerdict(verdict Verdict) bool {
 	return true
 }
 
-func firstOutputText(raw json.RawMessage) (string, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	token, err := decoder.Token()
-	if err != nil {
+func verdictOutputText(raw json.RawMessage) (string, error) {
+	var items []responseOutputItem
+	if err := json.Unmarshal(raw, &items); err != nil {
 		return "", err
 	}
-	delim, ok := token.(json.Delim)
-	if !ok || delim != '[' {
-		return "", errors.New("response output is not an array")
-	}
-	for decoder.More() {
-		var item responseOutputItem
-		if err := decoder.Decode(&item); err != nil {
-			return "", err
-		}
-		if item.Type != "message" || item.Role != "assistant" {
+	var text string
+	found := false
+	for _, item := range items {
+		if item.Type == "reasoning" {
 			continue
 		}
-		for _, part := range item.Content {
-			if part.Type == "output_text" {
-				return part.Text, nil
-			}
+		// Inspect every output item: a first allow must not hide a later
+		// verdict, refusal, or unexpected tool call.
+		if item.Type != "message" || item.Role != "assistant" || found || len(item.Content) != 1 || item.Content[0].Type != "output_text" {
+			return "", errors.New("response must contain exactly one verdict message")
 		}
+		text, found = item.Content[0].Text, true
 	}
-	return "", errors.New("response contains no output text")
+	if !found {
+		return "", errors.New("response contains no output text")
+	}
+	return text, nil
 }
