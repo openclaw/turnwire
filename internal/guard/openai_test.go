@@ -92,6 +92,58 @@ func TestResponsesGuardRejectsDifferentReturnedModel(t *testing.T) {
 	}
 }
 
+func TestResponsesGuardRequiresSingleCompleteVerdict(t *testing.T) {
+	allow := `{"type":"output_text","text":"{\"classification\":\"allow_coordination\",\"explanation\":\"Routine.\"}"}`
+	deny := `{"type":"output_text","text":"{\"classification\":\"deny_policy_violation\",\"explanation\":\"Denied.\"}"}`
+	message := func(parts string) string {
+		return `{"type":"message","role":"assistant","content":[` + parts + `]}`
+	}
+	tests := []struct {
+		name   string
+		output string
+		valid  bool
+	}{
+		{"single verdict", `[` + message(allow) + `]`, true},
+		{"reasoning and verdict", `[{"type":"reasoning","summary":[]},` + message(allow) + `]`, true},
+		{"conflicting parts", `[` + message(allow+`,`+deny) + `]`, false},
+		{"conflicting messages", `[` + message(allow) + `,` + message(deny) + `]`, false},
+		{"refusal after allow", `[` + message(allow+`,{"type":"refusal","refusal":"Denied."}`) + `]`, false},
+		{"refusal before allow", `[` + message(`{"type":"refusal","refusal":"Denied."},`+allow) + `]`, false},
+		{"unexpected tool call", `[` + message(allow) + `,{"type":"function_call","name":"unexpected"}]`, false},
+		{"malformed trailing item", `[` + message(allow) + `,42]`, false},
+		{"duplicate content", `[{"type":"message","role":"assistant","content":[{"type":"refusal"}],"content":[` + allow + `]}]`, false},
+		{"case aliased content", `[{"type":"message","role":"assistant","Content":[{"type":"refusal"}],"content":[` + allow + `]}]`, false},
+		{"duplicate type", `[` + message(allow) + `,{"type":"function_call","type":"reasoning"}]`, false},
+		{"duplicate classification", `[` + message(`{"type":"output_text","text":"{\"classification\":\"deny_secret\",\"classification\":\"allow_public\",\"explanation\":\"Routine.\"}"}`) + `]`, false},
+		{"wrong role", `[{"type":"message","role":"user","content":[` + allow + `]}]`, false},
+		{"empty output", `[]`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("x-request-id", "req_synthetic")
+				json.NewEncoder(w).Encode(map[string]any{
+					"id": "resp_synthetic", "model": "gpt-5.4-2026-03-05", "status": "completed",
+					"output": json.RawMessage(tt.output),
+				})
+			}))
+			defer server.Close()
+			model, err := NewHTTP(HTTPConfig{Endpoint: server.URL, Model: "gpt-5.4-2026-03-05", Client: server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			evaluation, err := model.Evaluate(context.Background(), Input{Text: "Synthetic scheduling note."})
+			if tt.valid {
+				if err != nil || evaluation.Decision != DecisionAllow {
+					t.Fatalf("valid output: evaluation = %#v, error = %v", evaluation, err)
+				}
+			} else if err == nil || evaluation.Decision != "" {
+				t.Fatalf("invalid output released a verdict: evaluation = %#v, error = %v", evaluation, err)
+			}
+		})
+	}
+}
+
 func TestNewHTTPDefaultClientHasTimeout(t *testing.T) {
 	model, err := NewHTTP(HTTPConfig{Endpoint: "https://example.com/v1/responses", Model: "gpt-5.4-2026-03-05"})
 	if err != nil {

@@ -26,9 +26,16 @@ class Guard(http.server.BaseHTTPRequestHandler):
         Guard.calls += 1
         text = json.loads(request['input'])['text']
         classification = 'review_ambiguous' if text.startswith('Review ') else 'allow_coordination'
+        content = [{'type': 'output_text', 'text': json.dumps({
+            'classification': classification, 'explanation': 'Synthetic scheduling note.'})}]
+        if text.startswith('Conflicting '):
+            content.append({'type': 'output_text', 'text': json.dumps({
+                'classification': 'deny_policy_violation', 'explanation': 'Synthetic denial.'})})
+        if text.startswith('Duplicate '):
+            content[0]['text'] = '{"classification":"deny_policy_violation","classification":"allow_coordination","explanation":"Synthetic duplicate."}'
         body = json.dumps({'id': 'resp-smoke', 'model': request['model'], 'status': 'completed',
-            'output': [{'type': 'message', 'role': 'assistant', 'content': [
-                {'type': 'output_text', 'text': json.dumps({'classification': classification, 'explanation': 'Synthetic scheduling note.'})}]}]}).encode()
+            'output': [{'type': 'reasoning', 'summary': []},
+                       {'type': 'message', 'role': 'assistant', 'content': content}]}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('x-request-id', 'req-smoke')
@@ -136,6 +143,13 @@ for protocol in ('2025-11-25', '2026-07-28'):
                 assert work.tool('send_message', send_args) == sent
                 assert personal.tool('receive_message', {'envelope': sent['envelope']}) == received
                 assert work.tool('confirm_delivery', {'acknowledgement': received['acknowledgement']}) == confirmed
+                for kind in ('Conflicting', 'Duplicate'):
+                    rejected = work.rpc('tools/call', {'name': 'send_message', 'arguments': {
+                        'destination': 'personal', 'text': kind + ' synthetic verdicts.',
+                        'request_id': kind.lower() + '-verdict-proof',
+                    }})
+                    assert rejected.get('isError'), rejected
+                    assert 'envelope' not in rejected.get('structuredContent', {}), rejected
             finally:
                 work.stop()
                 personal.stop()
@@ -201,5 +215,5 @@ for protocol in ('2025-11-25', '2026-07-28'):
                 personal.stop()
                 server.shutdown()
                 thread.join(timeout=5)
-            assert Guard.calls == 6, Guard.calls
-    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export and two identity rotations and strict local approval; six loopback guard calls.')
+            assert Guard.calls == 8, Guard.calls
+    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export, two identity rotations, strict local approval and ambiguous-verdict rejection; eight loopback guard calls.')

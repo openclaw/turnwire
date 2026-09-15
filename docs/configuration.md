@@ -112,9 +112,12 @@ fixed classifier instruction. Requests set:
 The model selects one classification from a closed enum. Turnwire maps that
 single value to a consistent `allow`, `review`, or `deny` verdict. The response
 must identify the exact configured model snapshot and include both OpenAI
-response and request IDs. Invalid output, a different returned model, missing
-evidence, HTTP failure, missing credentials, cancellation, and timeout produce
-no envelope. Deterministic secret rules can deny before the API call.
+response and request IDs. Exactly one assistant message with one verdict text
+part is required; reasoning items may accompany it. Multiple verdicts, refusals,
+unexpected output items, malformed trailing items, and duplicate JSON keys
+(including case aliases) fail closed. Invalid output, a different returned model,
+missing evidence, HTTP failure, missing credentials, cancellation, and timeout
+produce no envelope. Deterministic secret rules can deny before the API call.
 
 Default: pinned GPT-5.4 with `in_memory` cache retention. Current OpenAI
 requirements reject `in_memory` for GPT-5.5; use `24h` or set
