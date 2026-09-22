@@ -97,8 +97,14 @@ jobs:
           cd dist
           sha256sum -- ./*.tar.gz > checksums.txt
           cd ..
+          awk -v version="${GITHUB_REF_NAME#v}" '
+            $1 == "##" && $2 == version && $3 == "-" { found = 1; print; next }
+            found && $1 == "##" { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Turnwire $GITHUB_REF_NAME" \
-            --notes-file CHANGELOG.md
+            --notes-file "$RUNNER_TEMP/release-notes.md"

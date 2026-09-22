@@ -2,8 +2,12 @@
 
 ## Unreleased
 
-- Reject ambiguous local approval records with duplicate JSON fields, including case aliases and escaped spellings, during display, approval checks, and retries.
+## 0.1.6 - 2026-09-22
+
+**Highlights:** Guard verdicts and local approvals fail closed on ambiguous JSON.
+
 - Fail closed on conflicting or malformed guard output, including duplicate JSON keys, instead of accepting an allow verdict while ignoring denials, refusals, or unexpected tool calls.
+- Reject ambiguous local approval records with duplicate JSON fields, including case aliases and escaped spellings, during display, approval checks, and retries.
 
 ## 0.1.5 - 2026-09-13
 
