@@ -197,13 +197,14 @@ for protocol in ('2025-11-25', '2026-07-28'):
                 approvals = root / 'work' / 'audit' / 'approvals'
                 pending_path = approvals / (pending['message_id'] + '.pending.json')
                 original = pending_path.read_bytes()
-                pending_path.write_bytes(original + b'\n{}')
-                rejected = subprocess.run(
-                    work.command + ['approve', '--yes', pending['message_id']],
-                    text=True, capture_output=True, timeout=30,
-                )
-                assert rejected.returncode != 0
-                assert not (approvals / (pending['message_id'] + '.approved.json')).exists()
+                for malformed in (original + b'\n{}', b'{"direction":"inbound",' + original[1:]):
+                    pending_path.write_bytes(malformed)
+                    rejected = subprocess.run(
+                        work.command + ['approve', '--yes', pending['message_id']],
+                        text=True, capture_output=True, timeout=30,
+                    )
+                    assert rejected.returncode != 0
+                    assert not (approvals / (pending['message_id'] + '.approved.json')).exists()
                 pending_path.write_bytes(original)
                 work.cli('approve', '--yes', pending['message_id'])
                 work.start()

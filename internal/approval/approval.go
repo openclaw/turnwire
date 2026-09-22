@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -169,17 +168,10 @@ func decodeRecord(data []byte, record any) error {
 	if err := strictjson.ValidateText(data); err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(record); err != nil {
+	if err := strictjson.ValidateUniqueKeys(data); err != nil {
 		return err
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values in approval record")
-		}
-		return fmt.Errorf("trailing approval data: %w", err)
-	}
-	return nil
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(record)
 }

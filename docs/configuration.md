@@ -141,7 +141,8 @@ body. MCP has no approval tool.
 
 Retrying reruns deterministic and model guards. Approval can override only
 `review`, never `deny` or a guard failure. Malformed approval records fail closed,
-including extra JSON values, invalid text encoding, and unknown fields.
+including extra JSON values, invalid text encoding, unknown fields, and duplicate
+JSON keys (including case aliases and escaped spellings).
 
 ## Limits
 

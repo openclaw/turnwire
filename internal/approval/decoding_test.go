@@ -22,6 +22,9 @@ func TestAllApprovalReadersRejectMalformedRecords(t *testing.T) {
 		change func([]byte) []byte
 	}{
 		{"null record", func([]byte) []byte { return []byte("null") }},
+		{"duplicate binding", func(data []byte) []byte { return append([]byte(`{"direction":"inbound",`), data[1:]...) }},
+		{"case aliased binding", func(data []byte) []byte { return append([]byte(`{"DIRECTION":"inbound",`), data[1:]...) }},
+		{"escaped binding", func(data []byte) []byte { return append([]byte(`{"\u0064irection":"inbound",`), data[1:]...) }},
 		{"second value", func(data []byte) []byte { return append(data, []byte("\n{}")...) }},
 		{"trailing garbage", func(data []byte) []byte { return append(data, []byte("junk")...) }},
 		{"invalid UTF-8", func(data []byte) []byte { return append(data, 0xff) }},
