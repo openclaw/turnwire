@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Preserve local approval of legal messages whose JSON escapes exceed the 2 MiB approval-file limit using bounded, integrity-checked body sidecars; spilled pending reviews require the newer binary after rollback, thanks @SebTardif.
+- Refresh Go tooling to `golang.org/x/tools` v0.51.0 while retaining Go 1.26 source support.
 
 ## 0.1.6 - 2026-09-22
 
