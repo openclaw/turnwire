@@ -399,6 +399,9 @@ func TestOpenRejectsBroadExistingDirectoryWithoutChangingIt(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if log, err := Open(dir); err == nil {
 		_ = log.Close()
 		t.Fatal("Open accepted a broadly accessible existing directory")
@@ -442,6 +445,9 @@ func TestOpenRejectsUnsafeAuditFileEntries(t *testing.T) {
 		}
 		path := filepath.Join(dir, FileName)
 		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if log, err := Open(dir); err == nil {

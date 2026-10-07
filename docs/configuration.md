@@ -139,6 +139,15 @@ A `review` creates an immutable pending record beneath owner-only `approvals`.
 body, then requires local confirmation. Approval binds to the exact SHA-256
 body. MCP has no approval tool.
 
+A body that still fits `max_message_bytes` can expand past the 2 MiB approval
+file once JSON escapes it. That body is stored raw in an owner-only file beside
+the pending record; missing, malformed, or hash-mismatched bodies fail closed
+before display or approval.
+v0.1.6 can still read an inline pending record. It cannot read a spilled
+record, so rolling back to v0.1.6 leaves those pending reviews unreadable
+until the current binary is restored. Approved records stay inline and remain
+readable.
+
 Retrying reruns deterministic and model guards. Approval can override only
 `review`, never `deny` or a guard failure. Malformed approval records fail closed,
 including extra JSON values, invalid text encoding, unknown fields, and duplicate

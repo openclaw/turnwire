@@ -15,6 +15,11 @@ import (
 
 const maxFileBytes = 2 << 20
 
+// Fits reports whether data is a non-empty value within the file size cap.
+func Fits(data []byte) bool {
+	return len(data) > 0 && len(data) <= maxFileBytes
+}
+
 // Store holds a validated directory descriptor for no-follow file operations.
 type Store struct {
 	directory *os.File

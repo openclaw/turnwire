@@ -211,10 +211,31 @@ for protocol in ('2025-11-25', '2026-07-28'):
                 approved = work.tool('send_message', review_args)
                 assert approved['status'] == 'released'
                 assert approved['envelope']['guard_decision'] == 'review_approved'
+                work.stop()
+                config = json.loads(work.config.read_text())
+                config['limits']['max_message_bytes'] = 1048576
+                work.config.write_text(json.dumps(config))
+                work.start()
+                large_args = {'destination': 'personal', 'text': 'Review ' + '<>' * 200000,
+                              'request_id': 'large-approval-proof'}
+                pending = work.tool('send_message', large_args)
+                assert pending['status'] == 'review_required'
+                work.stop()
+                display = work.cli('approve', '--yes', pending['message_id'])
+                assert large_args['text'] in display
+                work.start()
+                released = work.tool('send_message', large_args)
+                assert released['status'] == 'released'
+                assert released['message_id'] == pending['message_id']
+                assert released['envelope']['body'] == large_args['text']
+                assert released['envelope']['guard_decision'] == 'review_approved'
+                work.stop()
+                work.start()
+                assert work.tool('send_message', large_args) == released
             finally:
                 work.stop()
                 personal.stop()
                 server.shutdown()
                 thread.join(timeout=5)
-            assert Guard.calls == 8, Guard.calls
-    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export, two identity rotations, strict local approval and ambiguous-verdict rejection; eight loopback guard calls.')
+            assert Guard.calls == 10, Guard.calls
+    print('PASS:', protocol, '- init, pairing, doctor, five MCP tools, signed transfer, retries before/after restart, inbox, audit, redacted export, two identity rotations, strict local approval, oversized escaped review approval across restart and ambiguous-verdict rejection; ten loopback guard calls.')

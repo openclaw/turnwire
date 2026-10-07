@@ -3,12 +3,14 @@ package approval
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/openclaw/turnwire/internal/securestore"
 	"github.com/openclaw/turnwire/internal/strictjson"
@@ -16,14 +18,15 @@ import (
 
 // Pending is the exact message awaiting local review.
 type Pending struct {
-	MessageID   string `json:"message_id"`
-	Direction   string `json:"direction"`
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Body        string `json:"body"`
-	BodySHA256  string `json:"body_sha256"`
-	ReasonCode  string `json:"reason_code"`
-	CreatedAt   string `json:"created_at"`
+	MessageID    string `json:"message_id"`
+	Direction    string `json:"direction"`
+	Source       string `json:"source"`
+	Destination  string `json:"destination"`
+	Body         string `json:"body"`
+	BodyExternal bool   `json:"body_external,omitempty"`
+	BodySHA256   string `json:"body_sha256"`
+	ReasonCode   string `json:"reason_code"`
+	CreatedAt    string `json:"created_at"`
 }
 
 // Binding identifies the exact protocol action an operator approved.
@@ -73,26 +76,75 @@ func (s *Store) AliasesDirectory(candidate *os.File) (bool, error) {
 }
 
 // SavePending durably stores an exact review request. Replays must match.
+// A body that is legal under max_message_bytes can still expand past the
+// secure-store cap once JSON escapes it. That body is spilled raw, beside
+// the pending record, so the review can still be approved.
 func (s *Store) SavePending(pending Pending) error {
+	if pending.BodyExternal {
+		return errors.New("pending approval body must be inline")
+	}
 	data, err := json.Marshal(pending)
 	if err != nil {
 		return fmt.Errorf("encode pending approval: %w", err)
 	}
-	name := pending.MessageID + ".pending.json"
-	err = s.store.Create(name, data)
+	record := data
+	if !securestore.Fits(data) {
+		if !securestore.Fits([]byte(pending.Body)) {
+			return errors.New("pending approval body does not fit after JSON escaping")
+		}
+		if err := s.writeSpilledBody(pending); err != nil {
+			return err
+		}
+		spilled := pending
+		spilled.Body = ""
+		spilled.BodyExternal = true
+		record, err = json.Marshal(spilled)
+		if err != nil {
+			return fmt.Errorf("encode pending approval: %w", err)
+		}
+		if !securestore.Fits(record) {
+			return errors.New("pending approval body does not fit after JSON escaping")
+		}
+	}
+	return s.storePending(pending.MessageID, record, pending)
+}
+
+func (s *Store) writeSpilledBody(pending Pending) error {
+	// A record that is already stored keeps its body until the replay check.
+	if _, err := s.store.Read(pending.MessageID + ".pending.json"); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read pending approval replay: %w", err)
+	}
+	bodyName := pending.MessageID + ".body"
+	err := s.store.Create(bodyName, []byte(pending.Body))
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("store pending approval body: %w", err)
+	}
+	existing, readErr := s.store.Read(bodyName)
+	if readErr != nil {
+		return fmt.Errorf("read pending approval body replay: %w", readErr)
+	}
+	if string(existing) != pending.Body {
+		return errors.New("pending approval conflicts with an existing message")
+	}
+	return nil
+}
+
+func (s *Store) storePending(messageID string, data []byte, pending Pending) error {
+	err := s.store.Create(messageID+".pending.json", data)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("store pending approval: %w", err)
 	}
-	existing, readErr := s.store.Read(name)
+	prior, readErr := s.loadPending(messageID)
 	if readErr != nil {
 		return fmt.Errorf("read pending approval replay: %w", readErr)
-	}
-	var prior Pending
-	if decodeErr := decodeRecord(existing, &prior); decodeErr != nil {
-		return fmt.Errorf("decode pending approval replay: %w", decodeErr)
 	}
 	if prior.Binding() != pending.Binding() || prior.Body != pending.Body {
 		return errors.New("pending approval conflicts with an existing message")
@@ -100,8 +152,7 @@ func (s *Store) SavePending(pending Pending) error {
 	return nil
 }
 
-// Pending loads one exact review request for local operator display.
-func (s *Store) Pending(messageID string) (Pending, error) {
+func (s *Store) loadPending(messageID string) (Pending, error) {
 	data, err := s.store.Read(messageID + ".pending.json")
 	if err != nil {
 		return Pending{}, err
@@ -110,7 +161,30 @@ func (s *Store) Pending(messageID string) (Pending, error) {
 	if err := decodeRecord(data, &pending); err != nil {
 		return Pending{}, fmt.Errorf("decode pending approval: %w", err)
 	}
+	if !pending.BodyExternal {
+		return pending, nil
+	}
+	if pending.Body != "" {
+		return Pending{}, errors.New("pending approval body is ambiguous")
+	}
+	body, err := s.store.Read(messageID + ".body")
+	if err != nil {
+		return Pending{}, fmt.Errorf("read pending approval body: %w", err)
+	}
+	if !utf8.Valid(body) {
+		return Pending{}, errors.New("pending approval body is not valid UTF-8")
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(body)) != pending.BodySHA256 {
+		return Pending{}, errors.New("pending approval body hash does not match")
+	}
+	pending.Body = string(body)
+	pending.BodyExternal = false
 	return pending, nil
+}
+
+// Pending loads one exact review request for local operator display.
+func (s *Store) Pending(messageID string) (Pending, error) {
+	return s.loadPending(messageID)
 }
 
 // Approve writes an immutable approval bound to one direction and peer pair.
