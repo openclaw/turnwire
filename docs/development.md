@@ -9,6 +9,9 @@ CI runs this proof on macOS and Linux with both supported Go series.
 Use the latest patch release of a supported Go series. CI also checks reachable
 vulnerabilities on Linux for both series with
 `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...`.
+CI pins Go 1.26.9 and 1.27.2 so a preinstalled runner toolchain cannot silently
+select an older, vulnerable patch. Linux release builds use Go 1.27.2; macOS
+releases use Go 1.26.9 to retain macOS 12 support.
 
 Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
 `OPENAI_API_KEY`; they incur API usage and use fixed synthetic text.
