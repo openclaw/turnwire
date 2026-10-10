@@ -36,6 +36,9 @@ jobs:
           fi
       - run: go test -race -timeout 5m ./...
       - run: go vet ./...
+      - name: Check reachable vulnerabilities
+        if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - run: go build -trimpath ./cmd/turnwire
       - name: Exercise built CLI and MCP endpoints
         run: python3 -I scripts/smoke.py ./turnwire

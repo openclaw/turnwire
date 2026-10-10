@@ -6,6 +6,10 @@ with `gofmt`. Run `python3 -I scripts/smoke.py ./turnwire` to exercise the built
 CLI and two MCP endpoints against a synthetic loopback guard without credentials.
 CI runs this proof on macOS and Linux with both supported Go series.
 
+Use the latest patch release of a supported Go series. CI also checks reachable
+vulnerabilities on Linux for both series with
+`go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...`.
+
 Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
 `OPENAI_API_KEY`; they incur API usage and use fixed synthetic text.
 
