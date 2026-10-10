@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ["1.26.x", "1.27.x"]
+        go: ["1.26.9", "1.27.2"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -36,6 +36,9 @@ jobs:
           fi
       - run: go test -race -timeout 5m ./...
       - run: go vet ./...
+      - name: Check reachable vulnerabilities
+        if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - run: go build -trimpath ./cmd/turnwire
       - name: Exercise built CLI and MCP endpoints
         run: python3 -I scripts/smoke.py ./turnwire
@@ -53,7 +56,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.x"
+          go-version: "1.26.9"
           cache: true
       - name: Verify macOS release compatibility
         run: |

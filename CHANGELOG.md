@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build Linux releases with Go 1.27.2 and macOS releases with Go 1.26.9 to address standard-library vulnerabilities while retaining macOS 12 support; pin CI to the same patched toolchains and check reachable vulnerabilities.
+- Refresh OS and concurrency support to `golang.org/x/sys` v0.49.0 and `golang.org/x/sync` v0.24.0, and update the release artifact actions to improve rate-limit retries, thanks @dependabot.
 - Preserve local approval of legal messages whose JSON escapes exceed the 2 MiB approval-file limit using bounded, integrity-checked body sidecars; spilled pending reviews require the newer binary after rollback, thanks @SebTardif.
 - Refresh Go tooling to `golang.org/x/tools` v0.51.0 while retaining Go 1.26 source support.
 
