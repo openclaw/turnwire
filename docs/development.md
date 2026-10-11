@@ -38,6 +38,32 @@ and rejects missing targets; an SDK or runner upgrade must not silently raise
 the minimum. CI builds and exercises both release architectures with Go 1.26,
 and the release workflow checks the actual binary before archiving or attesting it.
 
+## Releasing
+
+Prepare a release PR with a dated version section in `CHANGELOG.md`, a one-line
+`**Highlights:**` summary, and every unreleased bullet preserved. Leave an empty
+`Unreleased` section above it. Use a patch version for fixes, dependencies, and
+security changes; use a minor version for new product functionality. Merge only
+after review and CI pass on the exact PR head.
+
+Create a signed annotated `vVERSION` tag on the merged commit and push it.
+`.github/workflows/release.yml` builds Linux amd64/arm64 and macOS amd64/arm64
+archives with SBOMs, checksums, and GitHub build attestations. Its macOS jobs
+validate the deployment target, sign with the OpenClaw Foundation Developer ID,
+and notarize before archiving or attesting. The CI-only signing script uses an
+ephemeral keychain and requires repository secrets `MACOS_SIGNING_P12`,
+`MACOS_SIGNING_P12_PASSWORD`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, and
+`ASC_PRIVATE_KEY_P8`. Check `notarytool history` before tagging. For local signing,
+use the shared release-mac-app helper rather than the CI-only script.
+
+Verify the published release body matches its changelog section, download all
+five assets, verify checksums and attestations, and smoke-test the downloaded
+binary. On both macOS binaries check the deployment target, strict code signature,
+and online notarization ticket (`codesign --verify --strict --check-notarization
+-R=notarized BINARY`); standalone Mach-O files do not support stapled tickets.
+Confirm the Go module version resolves through `proxy.golang.org`. Turnwire has
+no npm, Homebrew, or Sparkle publication channel. Never replace an existing tag.
+
 ## Code boundaries
 
 - `cmd/turnwire` owns process signals and exit codes; `internal/cli` routes

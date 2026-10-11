@@ -2,9 +2,14 @@
 
 ## Unreleased
 
-- Build Linux releases with Go 1.27.2 and macOS releases with Go 1.26.9 to address standard-library vulnerabilities while retaining macOS 12 support; pin CI to the same patched toolchains and check reachable vulnerabilities.
-- Refresh OS and concurrency support to `golang.org/x/sys` v0.49.0 and `golang.org/x/sync` v0.24.0, and update the release artifact actions to improve rate-limit retries, thanks @dependabot.
+## 0.1.7 - 2026-10-11
+
+**Highlights:** Oversized local approvals work reliably, with Go security fixes and signed, notarized macOS binaries.
+
 - Preserve local approval of legal messages whose JSON escapes exceed the 2 MiB approval-file limit using bounded, integrity-checked body sidecars; spilled pending reviews require the newer binary after rollback, thanks @SebTardif.
+- Build Linux releases with Go 1.27.2 and macOS releases with Go 1.26.9 to address standard-library vulnerabilities while retaining macOS 12 support; pin CI to the same patched toolchains and check reachable vulnerabilities.
+- Sign and notarize macOS release binaries with Developer ID before archiving, checksumming, and attesting them.
+- Refresh OS and concurrency support to `golang.org/x/sys` v0.49.0 and `golang.org/x/sync` v0.24.0, and update the release artifact actions to improve rate-limit retries, thanks @dependabot.
 - Refresh Go tooling to `golang.org/x/tools` v0.51.0 while retaining Go 1.26 source support.
 
 ## 0.1.6 - 2026-09-22
