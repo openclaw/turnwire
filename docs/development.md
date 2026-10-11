@@ -64,6 +64,13 @@ and online notarization ticket (`codesign --verify --strict --check-notarization
 Confirm the Go module version resolves through `proxy.golang.org`. Turnwire has
 no npm, Homebrew, or Sparkle publication channel. Never replace an existing tag.
 
+If packaging fails before publication, repair the workflow on `main`, then run
+`gh workflow run release.yml --ref main -f tag=vVERSION`. This rebuilds the
+unchanged tagged source with the repaired workflow and signing script. Release
+notes still come from the tag; binary version metadata records the tag's commit.
+The attestation identifies the recovery workflow revision. Use this only while
+the GitHub release is absent; published artifacts must not be replaced.
+
 ## Code boundaries
 
 - `cmd/turnwire` owns process signals and exit codes; `internal/cli` routes
