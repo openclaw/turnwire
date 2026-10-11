@@ -17,8 +17,13 @@ binary=${1:?usage: notarize-macos.sh BINARY}
 umask 077
 work=$(mktemp -d "${RUNNER_TEMP:?}/turnwire-sign.XXXXXX")
 keychain="$work/signing.keychain-db"
+original_keychains=()
+while IFS= read -r existing_keychain; do
+  [[ -z "$existing_keychain" ]] || original_keychains+=("$existing_keychain")
+done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
 # shellcheck disable=SC2329 # Invoked by the EXIT trap.
 cleanup() {
+  security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || true
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -33,16 +38,20 @@ security unlock-keychain -p "$password" "$keychain"
 security import "$work/certificate.p12" -k "$keychain" -P "$MACOS_SIGNING_P12_PASSWORD" \
   -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
+echo 'Validating the imported Developer ID identity.'
 identity=$(security find-identity -v -p codesigning "$keychain" |
   awk '/Developer ID Application: OpenClaw Foundation/ { print $2; exit }')
 [[ "$identity" =~ ^[0-9A-Fa-f]{40}$ ]] || { echo 'Expected Developer ID identity missing.' >&2; exit 1; }
 
 xcrun notarytool history --key "$work/notary.p8" --key-id "$ASC_KEY_ID" \
   --issuer "$ASC_ISSUER_ID" --output-format json > "$work/history.json"
+echo 'Signing the release executable.'
 codesign --force --timestamp --options runtime --identifier org.openclaw.turnwire \
   --keychain "$keychain" --sign "$identity" "$binary"
 codesign --verify --strict "$binary"
 ditto -c -k "$binary" "$work/turnwire.zip"
+echo 'Submitting the signed executable for notarization.'
 xcrun notarytool submit "$work/turnwire.zip" --key "$work/notary.p8" --key-id "$ASC_KEY_ID" \
   --issuer "$ASC_ISSUER_ID" --no-s3-acceleration --wait --output-format json > "$work/notary.json"
 cat "$work/notary.json"
