@@ -53,6 +53,11 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          MACOS_SIGNING_P12: ${{ matrix.goos == 'darwin' && secrets.MACOS_SIGNING_P12 || '' }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ matrix.goos == 'darwin' && secrets.MACOS_SIGNING_P12_PASSWORD || '' }}
+          ASC_KEY_ID: ${{ matrix.goos == 'darwin' && secrets.ASC_KEY_ID || '' }}
+          ASC_ISSUER_ID: ${{ matrix.goos == 'darwin' && secrets.ASC_ISSUER_ID || '' }}
+          ASC_PRIVATE_KEY_P8: ${{ matrix.goos == 'darwin' && secrets.ASC_PRIVATE_KEY_P8 || '' }}
         run: |
           set -euo pipefail
           if [ "$GOOS" = darwin ]; then
@@ -66,6 +71,7 @@ jobs:
             -o "dist/${package}/turnwire" ./cmd/turnwire
           if [ "$GOOS" = darwin ]; then
             python3 -I scripts/check_macos_target.py "dist/${package}/turnwire"
+            bash scripts/notarize-macos.sh "dist/${package}/turnwire"
           fi
           cp README.md LICENSE "dist/${package}/"
           go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0 \
