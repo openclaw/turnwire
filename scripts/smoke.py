@@ -11,8 +11,10 @@ import threading
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary', type=pathlib.Path)
+parser.add_argument('--arch', choices=('arm64', 'x86_64'))
 args = parser.parse_args()
 binary = str(args.binary.resolve())
+binary_command = (['arch', '-' + args.arch] if args.arch else []) + [binary]
 
 class Guard(http.server.BaseHTTPRequestHandler):
     calls = 0
@@ -48,7 +50,7 @@ class Endpoint:
         self.name = name
         self.protocol = protocol
         self.config = root / (name + '.json')
-        self.command = [binary, '--config', str(self.config), '--data-dir', str(root / name)]
+        self.command = binary_command + ['--config', str(self.config), '--data-dir', str(root / name)]
         self.cli('init', '--identity', name, '--deployment-id', 'smoke-' + name,
                  '--endpoint', endpoint, '--api-key-env=', '--allow-remote=false',
                  '--prompt-cache-retention=')

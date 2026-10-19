@@ -12,6 +12,9 @@ vulnerabilities on Linux for both series with
 CI pins Go 1.26.9 and 1.27.2 so a preinstalled runner toolchain cannot silently
 select an older, vulnerable patch. Linux release builds use Go 1.27.2; macOS
 releases use Go 1.26.9 to retain macOS 12 support.
+All macOS jobs use Apple Silicon `xcode-27` runners. The amd64 release checks
+cross-compile and execute the built CLI under Rosetta, after verifying that
+`arch -x86_64 /usr/bin/true` succeeds.
 
 Live OpenAI tests are opt-in through `TURNWIRE_LIVE_OPENAI=1` and
 `OPENAI_API_KEY`; they incur API usage and use fixed synthetic text.
@@ -70,6 +73,17 @@ unchanged tagged source with the repaired workflow and signing script. Release
 notes still come from the tag; binary version metadata records the tag's commit.
 The attestation identifies the recovery workflow revision. Use this only while
 the GitHub release is absent; published artifacts must not be replaced.
+
+To validate the current branch without publishing or creating tags, run:
+
+```bash
+gh workflow run release.yml --ref main -f tag=vVERSION -f dry_run=true
+```
+
+Use the current version for `vVERSION`. Dry runs build the selected workflow
+revision instead of checking out the tag, sign and notarize the macOS archives,
+run their deployment-target and synthetic smoke checks, and upload workflow
+artifacts. They skip attestations and GitHub release publication.
 
 ## Code boundaries
 

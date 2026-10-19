@@ -9,6 +9,10 @@ on:
         description: Existing release tag to rebuild without moving it
         required: true
         type: string
+      dry_run:
+        description: Build and verify the selected workflow revision without publishing
+        type: boolean
+        default: false
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -32,12 +36,12 @@ jobs:
             goarch: arm64
             cgo: "0"
             go: "1.27.2"
-          - runner: macos-15-intel
+          - runner: xcode-27
             goos: darwin
             goarch: amd64
             cgo: "1"
             go: "1.26.9"
-          - runner: macos-15
+          - runner: xcode-27
             goos: darwin
             goarch: arm64
             cgo: "1"
@@ -58,13 +62,25 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           # Keep the workflow revision's packaging repair, but build tagged source.
           cp scripts/notarize-macos.sh "$RUNNER_TEMP/notarize-macos.sh"
-          git checkout --detach "refs/tags/$RELEASE_TAG"
+          cp scripts/smoke.py "$RUNNER_TEMP/smoke.py"
+          if [ "$DRY_RUN" != true ]; then
+            git checkout --detach "refs/tags/$RELEASE_TAG"
+          fi
           echo "RELEASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Patched Go 1.26 retains macOS 12 support; Linux uses current Go.
           go-version: ${{ matrix.go }}
           cache: true
+      - name: Ensure Rosetta for x86_64 execution
+        if: matrix.goos == 'darwin' && matrix.goarch == 'amd64'
+        run: |
+          if ! arch -x86_64 /usr/bin/true; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true
       - name: Build archive and SBOM
         env:
           CGO_ENABLED: ${{ matrix.cgo }}
@@ -89,6 +105,9 @@ jobs:
           if [ "$GOOS" = darwin ]; then
             python3 -I scripts/check_macos_target.py "dist/${package}/turnwire"
             bash "$RUNNER_TEMP/notarize-macos.sh" "dist/${package}/turnwire"
+            binary_arch=arm64
+            if [ "$GOARCH" = amd64 ]; then binary_arch=x86_64; fi
+            python3 -I "$RUNNER_TEMP/smoke.py" --arch "$binary_arch" "dist/${package}/turnwire"
           fi
           cp README.md LICENSE "dist/${package}/"
           go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0 \
@@ -96,6 +115,7 @@ jobs:
           tar -C dist -czf "dist/${package}.tar.gz" "${package}"
           rm -rf "dist/${package}"
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        if: ${{ !inputs.dry_run }}
         with:
           subject-path: dist/*.tar.gz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -105,6 +125,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: ${{ !inputs.dry_run }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
