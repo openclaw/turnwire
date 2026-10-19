@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Move macOS tests and releases to Apple Silicon `xcode-27` runners, verify x86_64 binaries under Rosetta, preserve the macOS 12 minimum, and support non-publishing release dry runs.
+
 ## 0.1.7 - 2026-10-11
 
 **Highlights:** Oversized local approvals work reliably, with Go security fixes and signed, notarized macOS binaries.

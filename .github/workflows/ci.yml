@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, xcode-27]
         go: ["1.26.9", "1.27.2"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -49,15 +49,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15-intel, macos-15]
-    runs-on: ${{ matrix.os }}
+        arch: [amd64, arm64]
+    runs-on: xcode-27
     timeout-minutes: 15
+    env:
+      GOOS: darwin
+      GOARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.9"
           cache: true
+      - name: Ensure Rosetta for x86_64 execution
+        if: matrix.arch == 'amd64'
+        run: |
+          if ! arch -x86_64 /usr/bin/true; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true
       - name: Verify macOS release compatibility
         run: |
           set -euo pipefail
@@ -65,4 +75,4 @@ jobs:
           source scripts/macos-release-env.sh
           go build -trimpath -ldflags "-s -w" -o turnwire ./cmd/turnwire
           python3 -I scripts/check_macos_target.py ./turnwire
-          python3 -I scripts/smoke.py ./turnwire
+          python3 -I scripts/smoke.py --arch ${{ matrix.arch == 'amd64' && 'x86_64' || 'arm64' }} ./turnwire
