@@ -9,9 +9,9 @@ CI runs this proof on macOS and Linux with both supported Go series.
 Use the latest patch release of a supported Go series. CI also checks reachable
 vulnerabilities on Linux for both series with
 `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...`.
-CI pins Go 1.26.9 and 1.27.2 so a preinstalled runner toolchain cannot silently
-select an older, vulnerable patch. Linux release builds use Go 1.27.2; macOS
-releases use Go 1.26.9 to retain macOS 12 support.
+CI pins Go 1.26.10 and 1.27.3 so a preinstalled runner toolchain cannot silently
+select an older, vulnerable patch. Linux release builds use Go 1.27.3; macOS
+releases use Go 1.26.10 to retain macOS 12 support.
 All macOS jobs use Apple Silicon `xcode-27` runners. The amd64 release checks
 cross-compile and execute the built CLI under Rosetta, after verifying that
 `arch -x86_64 /usr/bin/true` succeeds.

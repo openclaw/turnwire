@@ -30,22 +30,22 @@ jobs:
             goos: linux
             goarch: amd64
             cgo: "0"
-            go: "1.27.2"
+            go: "1.27.3"
           - runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
             cgo: "0"
-            go: "1.27.2"
+            go: "1.27.3"
           - runner: xcode-27
             goos: darwin
             goarch: amd64
             cgo: "1"
-            go: "1.26.9"
+            go: "1.26.10"
           - runner: xcode-27
             goos: darwin
             goarch: arm64
             cgo: "1"
-            go: "1.26.9"
+            go: "1.26.10"
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
