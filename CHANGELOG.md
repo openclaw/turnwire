@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build with Go 1.27.3 on Linux and Go 1.26.10 on macOS to reject the disclosed eMudhra incident keys.
+
 - Move macOS tests and releases to Apple Silicon `xcode-27` runners, verify x86_64 binaries under Rosetta, preserve the macOS 12 minimum, and support non-publishing release dry runs.
 
 ## 0.1.7 - 2026-10-11
