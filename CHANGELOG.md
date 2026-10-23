@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-10-23
+
+**Highlights:** Fix GO-2026-6809 in crypto/x509 with patched Go toolchains while retaining macOS 12 support.
+
 - Build with Go 1.27.3 on Linux and Go 1.26.10 on macOS to reject the disclosed eMudhra incident keys.
 
 - Move macOS tests and releases to Apple Silicon `xcode-27` runners, verify x86_64 binaries under Rosetta, preserve the macOS 12 minimum, and support non-publishing release dry runs.
