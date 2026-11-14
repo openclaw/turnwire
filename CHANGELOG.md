@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build with patched Go 1.27.4 on Linux and Go 1.26.11 on macOS to address GO-2026-6859 while preserving Go 1.26 source and macOS 12 support.
+- Refresh OS support to `golang.org/x/sys` v0.50.0, thanks @dependabot.
+
 ## 0.1.8 - 2026-10-23
 
 **Highlights:** Fix GO-2026-6809 in crypto/x509 with patched Go toolchains while retaining macOS 12 support.
