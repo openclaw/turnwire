@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh the pinned Go setup action to v7.1.0 for CI and release builds, thanks @dependabot.
+- Refresh OAuth2, concurrency, and Go tooling dependencies while preserving Go 1.26 source support.
 - Build with patched Go 1.27.4 on Linux and Go 1.26.11 on macOS to address GO-2026-6859 while preserving Go 1.26 source and macOS 12 support.
 - Refresh OS support to `golang.org/x/sys` v0.50.0, thanks @dependabot.
 
